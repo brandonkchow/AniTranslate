@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Manga Speech Bubble Base -->
+    <path
+        android:pathData="M 32,32 C 26,32 24,37 24,43 L 24,65 C 24,71 28,75 35,75 L 42,75 L 36,86 L 50,75 L 76,75 C 82,75 84,71 84,65 L 84,43 C 84,37 80,32 74,32 Z"
+        android:strokeWidth="3.5"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="24"
+                android:startY="32"
+                android:endX="84"
+                android:endY="86"
+                android:type="linear">
+                <item android:color="#7C4DFF" android:offset="0.0" />
+                <item android:color="#00B0FF" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Japanese 'A' / Translate Sparkle Accent inside bubble -->
+    <!-- 'A' letter and Sparkle -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M 44,45 L 40,59 L 45,59 L 46,55 L 52,55 L 53,59 L 58,59 L 54,45 Z M 47.5,51 L 49,47 L 50.5,51 Z" />
+
+    <!-- Sparkle / Forge Spark -->
+    <path
+        android:fillColor="#FFD54F"
+        android:pathData="M 67,43 L 68.5,47.5 L 73,49 L 68.5,50.5 L 67,55 L 65.5,50.5 L 61,49 L 65.5,47.5 Z" />
+
+    <!-- Small forge spark -->
+    <path
+        android:fillColor="#FF80AB"
+        android:pathData="M 61,58 L 62,60.5 L 64.5,61.5 L 62,62.5 L 61,65 L 60,62.5 L 57.5,61.5 L 60,60.5 Z" />
+</vector>
