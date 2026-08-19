@@ -22,10 +22,17 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
-          cache: 'gradle'
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew || true
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      - name: Setup Environment Files
+        run: |
+          if [ ! -f ".env" ]; then
+            touch .env
+          fi
 
       - name: Setup Keystore & Environment Secrets (Optional)
         id: setup-keystore
@@ -44,15 +51,19 @@ jobs:
       - name: Build Android APK
         run: |
           if [ "${{ steps.setup-keystore.outputs.has_release_keystore }}" = "true" ]; then
-            ./gradlew assembleRelease
+            gradle :app:assembleRelease --no-daemon --stacktrace
           else
-            ./gradlew assembleDebug
+            gradle :app:assembleDebug --no-daemon --stacktrace
           fi
 
       - name: Locate APK
         id: locate-apk
         run: |
-          APK_PATH=$(find app/build/outputs/apk -name "*.apk" | head -n 1)
+          APK_PATH=$(find app/build/outputs/apk -type f -name "*.apk" | head -n 1)
+          if [ -z "$APK_PATH" ]; then
+            echo "Error: No APK file found in app/build/outputs/apk"
+            exit 1
+          fi
           echo "Found APK at: $APK_PATH"
           echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
 
