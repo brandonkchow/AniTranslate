@@ -33,8 +33,8 @@ object Typesetter {
 
         for (bubble in bubbles) {
             if (!bubble.visible) continue
-            val text = bubble.translated.ifBlank { bubble.text }
-            if (text.isBlank()) continue
+            val rawText = bubble.translated.ifBlank { bubble.text }
+            if (rawText.isBlank()) continue
 
             val leftPx = bubble.x1 * bmpW
             val topPx = bubble.y1 * bmpH
@@ -44,6 +44,14 @@ object Typesetter {
             val boxWidth = (rightPx - leftPx).coerceAtLeast(24f)
             val boxHeight = (bottomPx - topPx).coerceAtLeast(24f)
             val aspectRatio = boxWidth / boxHeight
+
+            // Detect Shout / SFX emphasis (exclamation marks, scream dashes, uppercase)
+            val isShout = rawText.contains("!") || rawText.contains("！") || rawText.contains("――") || rawText.contains("--")
+            val text = if (isShout && rawText.length <= 25 && !rawText.all { it.isUpperCase() }) {
+                rawText.uppercase()
+            } else {
+                rawText
+            }
 
             // Elliptical safety inset: Speech bubbles are oval, so horizontal padding is wider near corners
             val horizontalPadding = (boxWidth * (if (aspectRatio < 0.7f) 0.12f else 0.15f)).coerceAtLeast(4f * densityScale)
@@ -60,15 +68,16 @@ object Typesetter {
                 else -> 4
             }
 
-            val baseSizePx = bubble.fontSizeSp * densityScale
+            val baseSizePx = bubble.fontSizeSp * densityScale * (if (isShout) 1.10f else 1.0f)
             val (optimalLayout, optimalPaint) = calculateBestLayoutBinarySearch(
                 text = text,
                 availableWidth = availableWidth,
                 availableHeight = availableHeight,
-                maxSizePx = baseSizePx * 1.25f,
+                maxSizePx = baseSizePx * 1.30f,
                 minSizePx = (baseSizePx * 0.40f).coerceAtLeast(9f * densityScale),
                 typeface = typeface,
-                maxLines = maxLines
+                maxLines = maxLines,
+                isShout = isShout
             )
 
             // Draw centered within the bubble
@@ -93,7 +102,8 @@ object Typesetter {
         maxSizePx: Float,
         minSizePx: Float,
         typeface: Typeface,
-        maxLines: Int
+        maxLines: Int,
+        isShout: Boolean = false
     ): Pair<StaticLayout, TextPaint> {
         var low = minSizePx
         var high = maxSizePx
@@ -108,6 +118,9 @@ object Typesetter {
                 color = Color.BLACK
                 textSize = mid
                 this.typeface = typeface
+                if (isShout) {
+                    isFakeBoldText = true
+                }
                 textAlign = Paint.Align.LEFT
             }
 
@@ -134,6 +147,9 @@ object Typesetter {
                 color = Color.BLACK
                 textSize = minSizePx
                 this.typeface = typeface
+                if (isShout) {
+                    isFakeBoldText = true
+                }
             }
             bestLayout = StaticLayout.Builder
                 .obtain(text, 0, text.length, fallbackPaint, availableWidth)

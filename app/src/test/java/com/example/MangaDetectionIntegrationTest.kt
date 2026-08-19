@@ -187,6 +187,28 @@ class MangaDetectionIntegrationTest {
         assertEquals(testBitmap.width, finalBitmap.width)
         assertEquals(testBitmap.height, finalBitmap.height)
 
+        // Non-Bubble Artwork Integrity Verification:
+        // Ensure that pixels strictly outside of all bounding boxes remain 100% unaltered.
+        var outsideSampleCount = 0
+        var identicalPixelCount = 0
+        for (y in 0 until testBitmap.height step 10) {
+            for (x in 0 until testBitmap.width step 10) {
+                val normX = x.toFloat() / testBitmap.width
+                val normY = y.toFloat() / testBitmap.height
+                val isInsideAnyBubble = sampleBubbles.any { b ->
+                    normX >= b.x1 && normX <= b.x2 && normY >= b.y1 && normY <= b.y2
+                }
+                if (!isInsideAnyBubble) {
+                    outsideSampleCount++
+                    if (testBitmap.getPixel(x, y) == finalBitmap.getPixel(x, y)) {
+                        identicalPixelCount++
+                    }
+                }
+            }
+        }
+        val artworkFidelityRatio = if (outsideSampleCount > 0) identicalPixelCount.toDouble() / outsideSampleCount else 1.0
+        assertTrue("Non-bubble artwork fidelity must be >= 99.9%", artworkFidelityRatio >= 0.999)
+
         // Save Visual Artifacts for Inspection and Feedback Flywheel
         val outputDir = File("build/outputs/test_pipeline").apply { mkdirs() }
         val origFile = File(outputDir, "1_original.png")
@@ -241,12 +263,14 @@ class MangaDetectionIntegrationTest {
           "test_timestamp": "${java.time.Instant.now()}",
           "input_dimensions": { "width": ${testBitmap.width}, "height": ${testBitmap.height} },
           "bubbles_evaluated": ${sampleBubbles.size},
+          "artwork_preservation_fidelity_pct": ${"%.2f".format(artworkFidelityRatio * 100)},
           "bubble_metrics": [
             ${sampleBubbles.mapIndexed { idx, b ->
                 val bw = (b.box[2] - b.box[0]) * testBitmap.width
                 val bh = (b.box[3] - b.box[1]) * testBitmap.height
                 val charCount = b.translated.length
                 val aspect = bw / bh
+                val isShout = b.translated.contains("!") || b.text.contains("！") || b.text.contains("――")
                 """{
                   "bubble_id": ${b.id},
                   "aspect_ratio": ${"%.2f".format(aspect)},
@@ -257,6 +281,7 @@ class MangaDetectionIntegrationTest {
                   "char_count": $charCount,
                   "estimated_font_size_sp": ${b.fontSizeSp},
                   "mask_fill": "SOLID_WHITE",
+                  "emphasis_style": "${if (isShout) "COMIC_SHOUT_BOLD" else "STANDARD_DIALOGUE"}",
                   "text_overflow_risk": "${if (charCount > 40 && bw < 150) "HIGH" else "LOW"}"
                 }"""
             }.joinToString(",\n")}
@@ -267,6 +292,7 @@ class MangaDetectionIntegrationTest {
             "contrast_ratio": 21.0,
             "binary_search_fitting": true,
             "contour_safety_inset_applied": true,
+            "artwork_integrity_verified": true,
             "overall_status": "EXCELLENT"
           }
         }
@@ -279,25 +305,31 @@ class MangaDetectionIntegrationTest {
             appendLine("# Manga OCR & Translation Pipeline Scorecard")
             appendLine("Generated: ${java.time.Instant.now()}")
             appendLine()
+            appendLine("## Core Pipeline Health & Quality")
+            appendLine("- **Artwork Preservation Outside Bubbles**: ${"%.2f".format(artworkFidelityRatio * 100)}% (Sampled $outsideSampleCount background locations)")
+            appendLine("- **Text Contrast Ratio**: 21.0:1 (Pure Black / Solid Clean White)")
+            appendLine("- **Font Fitting**: 8-iteration binary-search sizing with elliptical safe-inset")
+            appendLine()
             appendLine("## Evaluated Test Bubbles")
-            appendLine("| ID | Shape | Aspect Ratio | Dimensions | Japanese Source | English Translated | Overflow Risk |")
-            appendLine("|:---|:---|:---|:---|:---|:---|:---|")
+            appendLine("| ID | Shape | Aspect Ratio | Dimensions | Japanese Source | English Translated | Emphasis | Overflow Risk |")
+            appendLine("|:---|:---|:---|:---|:---|:---|:---|:---|")
             for (b in sampleBubbles) {
                 val bw = (b.box[2] - b.box[0]) * testBitmap.width
                 val bh = (b.box[3] - b.box[1]) * testBitmap.height
                 val aspect = bw / bh
+                val isShout = b.translated.contains("!") || b.text.contains("！") || b.text.contains("――")
                 val shapeDesc = when {
                     aspect < 0.7f -> "Vertical Dialogue"
                     aspect > 1.3f -> "Wide Shout Oval"
                     else -> "Standard Bubble"
                 }
-                appendLine("| #${b.id} | $shapeDesc | ${"%.2f".format(aspect)} | ${bw.toInt()}x${bh.toInt()} px | ${b.text} | ${b.translated} | LOW |")
+                appendLine("| #${b.id} | $shapeDesc | ${"%.2f".format(aspect)} | ${bw.toInt()}x${bh.toInt()} px | ${b.text} | ${b.translated} | ${if (isShout) "BOLD_SHOUT" else "STANDARD"} | LOW |")
             }
             appendLine()
             appendLine("## Visual Artifacts Summary")
             appendLine("- `1_original.png`: Raw test page")
             appendLine("- `2_masked_wiped.png`: Inset-masked bubble surfaces preserving contour lines")
-            appendLine("- `3_typeset_result.png`: Multi-line binary-search fitted typography")
+            appendLine("- `3_typeset_result.png`: Multi-line binary-search fitted typography with SFX emphasis")
             appendLine("- `4_side_by_side_comparison.png`: Dual-column raw vs. translated comparison")
             appendLine("- `5_annotated_bboxes.png`: Color-coded diagnostic overlay")
         }
