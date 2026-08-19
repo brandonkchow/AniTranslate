@@ -13,13 +13,13 @@ enum class ApiProvider(
     GEMINI(
         displayName = "Gemini",
         defaultBaseUrl = "https://generativelanguage.googleapis.com/v1beta",
-        defaultModel = "gemini-2.0-flash",
+        defaultModel = "gemini-2.5-flash",
         isVisionCapable = true,
         recommendedModels = listOf(
-            "gemini-2.0-flash" to "Gemini 2.0 Flash (Recommended · Multimodal)",
-            "gemini-2.5-flash" to "Gemini 2.5 Flash (Ultra-fast · Multimodal)",
-            "gemini-1.5-flash" to "Gemini 1.5 Flash (Legacy)",
-            "gemini-1.5-pro" to "Gemini 1.5 Pro (Deep Reasoning)"
+            "gemini-2.5-flash" to "Gemini 2.5 Flash (Recommended · Multimodal)",
+            "gemini-2.5-flash-image" to "Gemini 2.5 Flash Image (Vision Optimized)",
+            "gemini-3.5-flash" to "Gemini 3.5 Flash (High Speed · Multimodal)",
+            "gemini-3.1-pro-preview" to "Gemini 3.1 Pro Preview (Complex Reasoning)"
         )
     ),
     OPENROUTER(

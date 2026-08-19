@@ -179,6 +179,77 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun loadSampleMangaPage() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val context = getApplication<Application>()
+            val sampleFile = File(context.cacheDir, "sample_manga_page.png")
+            try {
+                // Generate a crisp sample manga page bitmap
+                val width = 900
+                val height = 1350
+                val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
+                val canvas = android.graphics.Canvas(bitmap)
+                canvas.drawColor(android.graphics.Color.WHITE)
+
+                val paintBorder = android.graphics.Paint().apply {
+                    color = android.graphics.Color.BLACK
+                    style = android.graphics.Paint.Style.STROKE
+                    strokeWidth = 6f
+                }
+                val paintFill = android.graphics.Paint().apply {
+                    color = android.graphics.Color.WHITE
+                    style = android.graphics.Paint.Style.FILL
+                }
+                val paintText = android.graphics.Paint().apply {
+                    color = android.graphics.Color.BLACK
+                    textSize = 30f
+                    isAntiAlias = true
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                }
+
+                // Panel 1 (Top)
+                canvas.drawRect(50f, 50f, width - 50f, height * 0.45f, paintBorder)
+                // Bubble 1 Top Right
+                val b1 = android.graphics.RectF(width * 0.62f, 70f, width * 0.92f, 300f)
+                canvas.drawOval(b1, paintFill)
+                canvas.drawOval(b1, paintBorder)
+                canvas.drawText("うますぎ警報", b1.left + 25f, b1.top + 90f, paintText)
+                canvas.drawText("発令―――！！", b1.left + 25f, b1.top + 150f, paintText)
+
+                // Bubble 2 Top Left
+                val b2 = android.graphics.RectF(width * 0.08f, 80f, width * 0.42f, 290f)
+                canvas.drawOval(b2, paintFill)
+                canvas.drawOval(b2, paintBorder)
+                canvas.drawText("なんだよそれ", b2.left + 25f, b2.top + 80f, paintText)
+                canvas.drawText("主なんじゃね！？", b2.left + 25f, b2.top + 140f, paintText)
+
+                // Panel 2 (Bottom)
+                canvas.drawRect(50f, height * 0.50f, width - 50f, height - 50f, paintBorder)
+                // Bubble 3 Bottom Right
+                val b3 = android.graphics.RectF(width * 0.58f, height * 0.55f, width * 0.92f, height * 0.82f)
+                canvas.drawOval(b3, paintFill)
+                canvas.drawOval(b3, paintBorder)
+                canvas.drawText("肉のことはいいから", b3.left + 25f, b3.top + 100f, paintText)
+                canvas.drawText("みんな逃げろ！", b3.left + 25f, b3.top + 160f, paintText)
+
+                sampleFile.outputStream().use { out ->
+                    bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+                }
+
+                val sampleUri = Uri.fromFile(sampleFile)
+                val item = SelectedImageItem(
+                    uri = sampleUri,
+                    name = "sample_manga_page.png",
+                    sizeBytes = sampleFile.length()
+                )
+                _selectedImages.value = listOf(item)
+                _snackbarMessage.emit("Loaded sample manga page!")
+            } catch (e: Exception) {
+                _snackbarMessage.emit("Failed to load sample: ${e.message}")
+            }
+        }
+    }
+
     fun clearImages() {
         _selectedImages.value = emptyList()
     }

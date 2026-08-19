@@ -39,8 +39,9 @@ class SlotStorage private constructor(private val context: Context) {
     }
 
     fun loadSlots(): List<ApiSlot> {
+        val envGeminiKey = getEnvGeminiKey()
         val jsonStr = prefs.getString(KEY_SLOTS, null)
-        val loaded = if (jsonStr.isNullOrBlank()) {
+        var loaded = if (jsonStr.isNullOrBlank()) {
             val defaults = createDefaultSlots()
             saveSlotsInternal(defaults)
             defaults
@@ -59,11 +60,46 @@ class SlotStorage private constructor(private val context: Context) {
                 defaults
             }
         }
+
+        // Migrate deprecated gemini models (e.g. gemini-2.0-flash / gemini-1.5-flash) and auto-inject env key
+        var modified = false
+        loaded = loaded.map { slot ->
+            var updated = slot
+            if (slot.provider == ApiProvider.GEMINI) {
+                if (slot.model == "gemini-2.0-flash" || slot.model == "gemini-1.5-flash" || slot.model == "gemini-1.5-pro") {
+                    updated = updated.copy(
+                        model = "gemini-2.5-flash",
+                        label = if (slot.label.contains("Gemini 2.0") || slot.label.contains("Gemini 1.5")) "Gemini 2.5 Flash" else slot.label
+                    )
+                    modified = true
+                }
+                if (updated.apiKey.isBlank() && envGeminiKey.isNotBlank()) {
+                    updated = updated.copy(apiKey = envGeminiKey)
+                    modified = true
+                }
+            }
+            updated
+        }
+
+        if (modified) {
+            saveSlotsInternal(loaded)
+        }
+
         _slots.value = loaded
         return loaded
     }
 
+    private fun getEnvGeminiKey(): String {
+        return try {
+            val key = com.example.BuildConfig.GEMINI_API_KEY
+            if (key.isNotBlank() && key != "MY_GEMINI_API_KEY") key.trim() else ""
+        } catch (e: Throwable) {
+            ""
+        }
+    }
+
     fun createDefaultSlots(): List<ApiSlot> {
+        val envGeminiKey = getEnvGeminiKey()
         return listOf(
             ApiSlot(
                 provider = ApiProvider.OPENROUTER,
@@ -76,9 +112,9 @@ class SlotStorage private constructor(private val context: Context) {
             ),
             ApiSlot(
                 provider = ApiProvider.GEMINI,
-                label = "Gemini 2.0 Flash",
-                apiKey = "",
-                model = "gemini-2.0-flash",
+                label = "Gemini 2.5 Flash",
+                apiKey = envGeminiKey,
+                model = "gemini-2.5-flash",
                 baseUrl = "https://generativelanguage.googleapis.com/v1beta",
                 role = SlotRole.ANY,
                 enabled = true

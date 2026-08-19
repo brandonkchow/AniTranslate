@@ -60,12 +60,26 @@ class OpenAiCompatibleClient {
             val url = "$cleanBase/chat/completions"
 
             val systemPrompt = """
-                You are a manga OCR and speech bubble detector.
-                Detect all speech bubbles and text in the manga image.
-                Return ONLY valid JSON in format:
-                {"bubbles":[{"id":1,"text":"待って！","box":[0.12,0.20,0.41,0.38],"vertical":true}]}
-                box = normalized [x1,y1,x2,y2] in 0.0 to 1.0 (left, top, right, bottom).
-                Include printed narration text. Skip pure SFX if unreadable.
+                You are a high-precision Japanese Manga Speech Bubble and OCR Detector.
+                Detect all speech bubbles, dialogue text, and narration text boxes in this manga image.
+                
+                For each speech bubble, provide:
+                - "id": integer starting from 1 in standard Japanese reading order (top-to-bottom, right-to-left)
+                - "text": exact transcribed Japanese text / kanji / furigana from inside the bubble
+                - "box": [x1, y1, x2, y2] normalized bounding box coordinates (0.0 to 1.0) where x1 is left, y1 is top, x2 is right, y2 is bottom
+                - "vertical": boolean (true if vertical Japanese text, false if horizontal)
+                
+                Output ONLY a JSON object with this format:
+                {
+                  "bubbles": [
+                    {
+                      "id": 1,
+                      "text": "いや これあれだよ！ きっと名のある牛だよ！",
+                      "box": [0.70, 0.02, 0.96, 0.18],
+                      "vertical": true
+                    }
+                  ]
+                }
             """.trimIndent()
 
             val requestJson = JSONObject().apply {
@@ -223,10 +237,32 @@ class OpenAiCompatibleClient {
         val clean = cleanJson(rawText)
         val list = mutableListOf<Bubble>()
         try {
-            val root = JSONObject(clean)
-            val arr = root.optJSONArray("bubbles") ?: root.optJSONArray("items") ?: JSONArray()
-            for (i in 0 until arr.length()) {
-                list.add(Bubble.fromJson(arr.getJSONObject(i)))
+            if (clean.startsWith("[")) {
+                val arr = JSONArray(clean)
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i)
+                    if (obj != null) {
+                        list.add(Bubble.fromJson(obj, fallbackId = i + 1))
+                    }
+                }
+            } else {
+                val root = JSONObject(clean)
+                val arr = root.optJSONArray("bubbles")
+                    ?: root.optJSONArray("speech_bubbles")
+                    ?: root.optJSONArray("items")
+                    ?: root.optJSONArray("text_boxes")
+                    ?: root.optJSONArray("boxes")
+                    ?: root.optJSONArray("dialogue")
+                    ?: root.optJSONArray("results")
+                    ?: root.optJSONArray("data")
+                if (arr != null) {
+                    for (i in 0 until arr.length()) {
+                        val obj = arr.optJSONObject(i)
+                        if (obj != null) {
+                            list.add(Bubble.fromJson(obj, fallbackId = i + 1))
+                        }
+                    }
+                }
             }
         } catch (e: Exception) {
             Log.w("OpenAiCompatibleClient", "Failed to parse bubbles JSON: $rawText", e)
@@ -238,14 +274,32 @@ class OpenAiCompatibleClient {
         val clean = cleanJson(rawText)
         val map = mutableMapOf<Int, String>()
         try {
-            val root = JSONObject(clean)
-            val arr = root.optJSONArray("items") ?: root.optJSONArray("translations") ?: JSONArray()
-            for (i in 0 until arr.length()) {
-                val item = arr.getJSONObject(i)
-                val id = item.optInt("id", -1)
-                val trans = item.optString("translated", item.optString("text", ""))
-                if (id != -1 && trans.isNotBlank()) {
-                    map[id] = trans
+            if (clean.startsWith("[")) {
+                val arr = JSONArray(clean)
+                for (i in 0 until arr.length()) {
+                    val item = arr.optJSONObject(i) ?: continue
+                    val id = item.optInt("id", item.optInt("index", i + 1))
+                    val trans = item.optString("translated", item.optString("english", item.optString("text", "")))
+                    if (id != -1 && trans.isNotBlank()) {
+                        map[id] = trans
+                    }
+                }
+            } else {
+                val root = JSONObject(clean)
+                val arr = root.optJSONArray("items")
+                    ?: root.optJSONArray("translations")
+                    ?: root.optJSONArray("bubbles")
+                    ?: root.optJSONArray("data")
+                    ?: root.optJSONArray("results")
+                if (arr != null) {
+                    for (i in 0 until arr.length()) {
+                        val item = arr.optJSONObject(i) ?: continue
+                        val id = item.optInt("id", item.optInt("index", i + 1))
+                        val trans = item.optString("translated", item.optString("english", item.optString("text", "")))
+                        if (id != -1 && trans.isNotBlank()) {
+                            map[id] = trans
+                        }
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -264,10 +318,18 @@ class OpenAiCompatibleClient {
         if (str.endsWith("```")) {
             str = str.removeSuffix("```").trim()
         }
-        val firstBrace = str.indexOf('{')
-        val lastBrace = str.lastIndexOf('}')
-        if (firstBrace != -1 && lastBrace != -1 && lastBrace > firstBrace) {
-            str = str.substring(firstBrace, lastBrace + 1)
+        val firstObj = str.indexOf('{')
+        val lastObj = str.lastIndexOf('}')
+        val firstArr = str.indexOf('[')
+        val lastArr = str.lastIndexOf(']')
+
+        // If it's an outer JSON array [ ... ]
+        if (firstArr != -1 && lastArr != -1 && (firstObj == -1 || firstArr < firstObj) && lastArr > lastObj) {
+            return str.substring(firstArr, lastArr + 1)
+        }
+        // If it's an outer JSON object { ... }
+        if (firstObj != -1 && lastObj != -1 && lastObj > firstObj) {
+            return str.substring(firstObj, lastObj + 1)
         }
         return str
     }

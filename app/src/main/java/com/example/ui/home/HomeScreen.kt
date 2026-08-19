@@ -386,6 +386,32 @@ fun HomeScreen(
                 }
             }
 
+            // Quick load test manga sample
+            OutlinedButton(
+                onClick = { viewModel.loadSampleMangaPage() },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(42.dp)
+                    .testTag("load_sample_page_button"),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = EditorialLavender
+                ),
+                border = androidx.compose.foundation.BorderStroke(1.dp, EditorialLavender.copy(alpha = 0.4f))
+            ) {
+                Icon(
+                    imageVector = Icons.Default.AddPhotoAlternate,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Load Sample Manga Page (Quick Test)",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+
             // Thumbnail strip if images selected
             AnimatedVisibility(visible = uiState.selectedImages.isNotEmpty()) {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {

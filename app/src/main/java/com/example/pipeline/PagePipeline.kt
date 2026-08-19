@@ -51,11 +51,19 @@ class PagePipeline(
                     status = PageStatus.FAILED,
                     errorMessage = "Corrupt image format or decode failure."
                 )
-                RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "ERROR", "Corrupt image format or decode failure.")
+                RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "ERROR", "Corrupt image format or decode failure: ${origFile.name}")
                 onStatusUpdate(currentPage)
                 return@withContext currentPage
             }
             ImageScaler.createWorkingCopy(origBmp, workingFile, 2048)
+            val fileKb = origFile.length() / 1024
+            RunLogger.logPageEvent(
+                context,
+                currentPage.jobId,
+                currentPage.pageIndex,
+                "PREPARE",
+                "Image loaded: ${origFile.name} | Dimensions: ${origBmp.width}x${origBmp.height} px | Size: ${fileKb} KB"
+            )
             currentPage = currentPage.copy(
                 workingScaledPath = workingFile.absolutePath,
                 width = origBmp.width,
@@ -89,11 +97,12 @@ class PagePipeline(
 
             val workingBmp = ImageScaler.loadBitmapFromFile(workingFile) ?: run {
                 currentPage = currentPage.copy(status = PageStatus.FAILED, errorMessage = "Failed to load working image.")
-                RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "ERROR", "Failed to load working image.")
+                RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "ERROR", "Failed to load working image: ${workingFile.name}")
                 onStatusUpdate(currentPage)
                 return@withContext currentPage
             }
             val base64 = ImageScaler.bitmapToBase64(workingBmp, quality = 85)
+            val startTimeMs = System.currentTimeMillis()
 
             val detectResult = keyRouter.executeWithSlot(PipelineStage.DETECT_OCR, slot) { s ->
                 when (s.provider) {
@@ -102,6 +111,7 @@ class PagePipeline(
                     ApiProvider.GROQ -> Result.failure(IllegalArgumentException("Groq does not support image detection."))
                 }
             }
+            val elapsedMs = System.currentTimeMillis() - startTimeMs
 
             if (detectResult.isFailure) {
                 val exception = detectResult.exceptionOrNull()
@@ -111,13 +121,21 @@ class PagePipeline(
                     waitingUntilEpochMs = if (isRateLimit) System.currentTimeMillis() + 15000L else 0L,
                     errorMessage = exception?.message ?: "Detection failed"
                 )
-                RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, if (isRateLimit) "RATE_LIMIT" else "DETECT_FAIL", exception?.message ?: "Detection error")
+                RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, if (isRateLimit) "RATE_LIMIT" else "DETECT_FAIL", "${exception?.message} (${elapsedMs}ms)")
                 onStatusUpdate(currentPage)
                 return@withContext currentPage
             }
 
             bubbles = detectResult.getOrNull().orEmpty()
-            RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "DETECT_DONE", "Detected ${bubbles.size} bubbles")
+            if (bubbles.isEmpty()) {
+                RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "DETECT_DONE", "0 bubbles detected (${elapsedMs}ms). Page treated as non-dialogue.")
+            } else {
+                RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "DETECT_DONE", "Detected ${bubbles.size} bubbles in ${elapsedMs}ms:")
+                bubbles.forEach { b ->
+                    val boxStr = "[${String.format(java.util.Locale.US, "%.3f,%.3f,%.3f,%.3f", b.x1, b.y1, b.x2, b.y2)}]"
+                    RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "DETECT_ITEM", "  #${b.id} $boxStr (vert=${b.vertical}): \"${b.text.replace("\n", " ")}\"")
+                }
+            }
             currentPage = currentPage.copy(
                 bubblesJson = Bubble.listToJsonString(bubbles),
                 lastStageAttempted = ""
@@ -149,6 +167,7 @@ class PagePipeline(
             RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "TRANSLATE_START", "Translating ${bubbles.size} bubbles with ${slot.displayTitle}")
             onStatusUpdate(currentPage)
 
+            val startTimeMs = System.currentTimeMillis()
             val transResult = keyRouter.executeWithSlot(PipelineStage.TRANSLATE, slot) { s ->
                 when (s.provider) {
                     ApiProvider.GEMINI -> geminiClient.translateBubbles(s.baseUrl, s.apiKey, s.model, bubbles)
@@ -156,6 +175,7 @@ class PagePipeline(
                         openAiClient.translateBubbles(s.baseUrl, s.apiKey, s.model, bubbles, provider = s.provider)
                 }
             }
+            val elapsedMs = System.currentTimeMillis() - startTimeMs
 
             if (transResult.isFailure) {
                 val exception = transResult.exceptionOrNull()
@@ -165,7 +185,7 @@ class PagePipeline(
                     waitingUntilEpochMs = if (isRateLimit) System.currentTimeMillis() + 15000L else 0L,
                     errorMessage = exception?.message ?: "Translation failed"
                 )
-                RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, if (isRateLimit) "RATE_LIMIT" else "TRANSLATE_FAIL", exception?.message ?: "Translation error")
+                RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, if (isRateLimit) "RATE_LIMIT" else "TRANSLATE_FAIL", "${exception?.message} (${elapsedMs}ms)")
                 onStatusUpdate(currentPage)
                 return@withContext currentPage
             }
@@ -175,7 +195,12 @@ class PagePipeline(
                 val trans = translations[b.id] ?: b.translated
                 b.copy(translated = trans)
             }
-            RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "TRANSLATE_DONE", "Translated ${translations.size} bubbles successfully")
+            RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "TRANSLATE_DONE", "Translated ${translations.size} bubbles in ${elapsedMs}ms:")
+            bubbles.forEach { b ->
+                if (b.translated.isNotBlank()) {
+                    RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "TRANSLATE_ITEM", "  #${b.id}: \"${b.text.replace("\n", " ")}\" -> \"${b.translated.replace("\n", " ")}\"")
+                }
+            }
             currentPage = currentPage.copy(
                 bubblesJson = Bubble.listToJsonString(bubbles),
                 lastStageAttempted = ""

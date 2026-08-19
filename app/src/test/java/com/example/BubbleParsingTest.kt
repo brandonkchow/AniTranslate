@@ -4,7 +4,12 @@ import com.example.data.models.Bubble
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [36])
 class BubbleParsingTest {
 
     @Test
@@ -76,5 +81,45 @@ class BubbleParsingTest {
 
         val restoredBubble = hiddenBubble.copy(visible = !hiddenBubble.visible)
         assertEquals(true, restoredBubble.visible)
+    }
+
+    @Test
+    fun testBubbleParsingGeminiFormats() {
+        // Standard [x1, y1, x2, y2]
+        val json1 = org.json.JSONObject("""
+            {"id": 1, "text": "助けて！", "box": [0.70, 0.10, 0.95, 0.35], "vertical": true}
+        """.trimIndent())
+        val bubble1 = Bubble.fromJson(json1)
+        assertEquals(1, bubble1.id)
+        assertEquals("助けて！", bubble1.text)
+        assertEquals(0.70f, bubble1.x1, 0.001f)
+        assertEquals(0.10f, bubble1.y1, 0.001f)
+        assertEquals(0.95f, bubble1.x2, 0.001f)
+        assertEquals(0.35f, bubble1.y2, 0.001f)
+        assertEquals(true, bubble1.vertical)
+
+        // Gemini box_2d 0..1000 format: [ymin, xmin, ymax, xmax]
+        val json2 = org.json.JSONObject("""
+            {"id": 2, "ocr": "なんだって！？", "box_2d": [100, 700, 350, 950]}
+        """.trimIndent())
+        val bubble2 = Bubble.fromJson(json2)
+        assertEquals(2, bubble2.id)
+        assertEquals("なんだって！？", bubble2.text)
+        assertEquals(0.70f, bubble2.x1, 0.001f)
+        assertEquals(0.10f, bubble2.y1, 0.001f)
+        assertEquals(0.95f, bubble2.x2, 0.001f)
+        assertEquals(0.35f, bubble2.y2, 0.001f)
+
+        // Object coordinates {x1, y1, x2, y2}
+        val json3 = org.json.JSONObject("""
+            {"index": 3, "japanese": "了解", "box": {"x1": 0.2, "y1": 0.3, "x2": 0.5, "y2": 0.6}}
+        """.trimIndent())
+        val bubble3 = Bubble.fromJson(json3)
+        assertEquals(3, bubble3.id)
+        assertEquals("了解", bubble3.text)
+        assertEquals(0.2f, bubble3.x1, 0.001f)
+        assertEquals(0.3f, bubble3.y1, 0.001f)
+        assertEquals(0.5f, bubble3.x2, 0.001f)
+        assertEquals(0.6f, bubble3.y2, 0.001f)
     }
 }
