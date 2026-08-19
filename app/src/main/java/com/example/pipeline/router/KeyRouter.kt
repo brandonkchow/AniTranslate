@@ -69,15 +69,14 @@ class KeyRouter(private val slotStorage: SlotStorage) {
     ): Result<T> {
         val slotSem = getSlotSemaphore(slot.id)
         val visionSem = if (stage == PipelineStage.DETECT_OCR) getVisionSemaphore(slot.id) else null
+        val startTime = System.currentTimeMillis()
 
-        return if (visionSem != null) {
+        val result = if (visionSem != null) {
             visionSem.acquire()
             try {
                 slotSem.acquire()
                 try {
-                    val result = block(slot)
-                    handleExecutionResult(stage, slot, result)
-                    result
+                    block(slot)
                 } finally {
                     slotSem.release()
                 }
@@ -87,31 +86,58 @@ class KeyRouter(private val slotStorage: SlotStorage) {
         } else {
             slotSem.acquire()
             try {
-                val result = block(slot)
-                handleExecutionResult(stage, slot, result)
-                result
+                block(slot)
             } finally {
                 slotSem.release()
             }
         }
+
+        val latencyMs = System.currentTimeMillis() - startTime
+        handleExecutionResult(stage, slot, result, latencyMs)
+        return result
     }
 
-    private fun <T> handleExecutionResult(stage: PipelineStage, slot: ApiSlot, result: Result<T>) {
+    private fun <T> handleExecutionResult(stage: PipelineStage, slot: ApiSlot, result: Result<T>, latencyMs: Long) {
         val exception = result.exceptionOrNull()
         if (exception is ApiException) {
+            val isRateLimit = exception.isRateLimited
+            com.example.data.telemetry.ApiUsageTracker.recordRequest(
+                provider = slot.provider,
+                model = slot.model,
+                isSuccess = false,
+                isRateLimit = isRateLimit,
+                latencyMs = latencyMs,
+                retryAfterMs = exception.retryAfterMs
+            )
+
             if (exception.isInvalidKey) {
                 // 401 / 403: Badge slot invalid
                 slotStorage.markSlotInvalidKey(slot.id, true)
-            } else if (exception.isRateLimited) {
+            } else if (isRateLimit) {
                 // 429 / 503 / Quota: Calculate backoff
                 val backoffMs = exception.retryAfterMs ?: calculateBackoffMs(slot.consecutiveRateLimits)
                 slotStorage.setSlotCooldown(slot.id, backoffMs, incrementRateLimits = true)
             }
         } else if (result.isSuccess) {
+            com.example.data.telemetry.ApiUsageTracker.recordRequest(
+                provider = slot.provider,
+                model = slot.model,
+                isSuccess = true,
+                isRateLimit = false,
+                latencyMs = latencyMs
+            )
             // Reset consecutive rate limits on success if was healthy
             if (slot.consecutiveRateLimits > 0 && !slot.isCoolingDown()) {
                 slotStorage.resetSlotCooldown(slot.id)
             }
+        } else {
+            com.example.data.telemetry.ApiUsageTracker.recordRequest(
+                provider = slot.provider,
+                model = slot.model,
+                isSuccess = false,
+                isRateLimit = false,
+                latencyMs = latencyMs
+            )
         }
     }
 

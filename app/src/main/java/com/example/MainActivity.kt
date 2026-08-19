@@ -90,7 +90,8 @@ fun BubbleforgeApp() {
             JobScreen(
                 viewModel = jobViewModel,
                 onNavigateBack = { navController.popBackStack() },
-                onNavigateToEditor = { pageId -> navController.navigate(Screen.Editor.createRoute(pageId)) }
+                onNavigateToEditor = { pageId -> navController.navigate(Screen.Editor.createRoute(pageId)) },
+                onNavigateToSettings = { navController.navigate(Screen.Settings.route) }
             )
         }
 

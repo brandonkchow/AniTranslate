@@ -92,6 +92,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.widget.Toast
+import com.example.ui.components.GeminiUsageDashboard
 import com.example.data.slots.ApiProvider
 import com.example.data.slots.ApiSlot
 import com.example.data.slots.SlotRole
@@ -241,6 +242,11 @@ fun SettingsScreen(
                     }
                 }
             }
+
+            // Gemini API Quota & Rate Limit Telemetry Dashboard
+            GeminiUsageDashboard(
+                initiallyExpanded = true
+            )
 
             // API Slots Header with Actions
             Column(

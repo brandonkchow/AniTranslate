@@ -10,6 +10,8 @@ import com.example.data.slots.SlotStorage
 import com.example.net.GeminiClient
 import com.example.net.OpenAiCompatibleClient
 import com.example.pipeline.router.KeyRouter
+import com.example.data.telemetry.ApiHealthStatus
+import com.example.data.telemetry.ApiUsageTracker
 import com.example.utils.RunLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -125,9 +127,10 @@ class JobManager(
                     break
                 }
 
-                // Run up to 2 concurrent page jobs
+                // Run up to 2 concurrent page jobs (or 1 if rate-limit alert is active)
+                val geminiStatus = ApiUsageTracker.geminiMetrics.value.status
+                val maxConcurrent = if (geminiStatus == ApiHealthStatus.APPROACHING_LIMIT) 1 else 2
                 val currentlyRunning = activePageJobs.size
-                val maxConcurrent = 2
                 val availableSlots = maxConcurrent - currentlyRunning
 
                 if (availableSlots > 0 && pendingPages.isNotEmpty()) {
@@ -148,9 +151,14 @@ class JobManager(
                             }
                         }
                         activePageJobs[page.id] = job
+                        // Inter-page dispatch pacing if auto-throttle is on
+                        if (ApiUsageTracker.autoThrottleEnabled.value && pendingPages.size > 1) {
+                            delay(ApiUsageTracker.throttleDelayMs.value)
+                        }
                     }
                 }
 
+                ApiUsageTracker.refreshMetrics()
                 delay(1000)
             }
         }

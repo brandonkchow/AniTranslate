@@ -68,6 +68,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import com.example.ui.components.GeminiUsageDashboard
 import com.example.data.db.PageEntity
 import com.example.data.db.PageStatus
 import com.example.ui.theme.EditorialAmber
@@ -98,7 +99,8 @@ import java.io.File
 fun JobScreen(
     viewModel: JobViewModel,
     onNavigateBack: () -> Unit,
-    onNavigateToEditor: (Long) -> Unit
+    onNavigateToEditor: (Long) -> Unit,
+    onNavigateToSettings: (() -> Unit)? = null
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -349,6 +351,15 @@ fun JobScreen(
                     }
                 }
             }
+
+            // Gemini API Usage & Rate Limit Telemetry Dashboard
+            GeminiUsageDashboard(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                isJobPaused = uiState.isPaused,
+                onPauseJob = { viewModel.pauseJob() },
+                onResumeJob = { viewModel.resumeJob() },
+                onManageKeys = onNavigateToSettings
+            )
 
             // Dynamic Waiting / Rate Limit Banner (matching Design HTML mockup)
             AnimatedVisibility(visible = uiState.waitingBanner != null) {
