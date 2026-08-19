@@ -26,16 +26,15 @@ class ApiKeyRepositoryTest {
     @Before
     fun setup() {
         context = ApplicationProvider.getApplicationContext()
-        storage = SlotStorage(context)
+        storage = SlotStorage.getInstance(context)
     }
 
     @Test
     fun testInitialSlotsExist() {
         val slots = storage.loadSlots()
-        assertTrue(slots.isNotEmpty())
-        assertTrue(slots.any { it.provider == ApiProvider.GEMINI })
-        assertTrue(slots.any { it.provider == ApiProvider.GROQ })
-        assertTrue(slots.any { it.provider == ApiProvider.OPENROUTER })
+        assertTrue(slots.size >= 2)
+        assertEquals(ApiProvider.OPENROUTER, slots[0].provider)
+        assertEquals(ApiProvider.GEMINI, slots[1].provider)
     }
 
     @Test

@@ -7,31 +7,52 @@ enum class ApiProvider(
     val displayName: String,
     val defaultBaseUrl: String,
     val defaultModel: String,
-    val isVisionCapable: Boolean
+    val isVisionCapable: Boolean,
+    val recommendedModels: List<Pair<String, String>> = emptyList() // Pair<ModelId, DisplayLabel>
 ) {
     GEMINI(
         displayName = "Gemini",
         defaultBaseUrl = "https://generativelanguage.googleapis.com/v1beta",
         defaultModel = "gemini-2.0-flash",
-        isVisionCapable = true
-    ),
-    GROQ(
-        displayName = "Groq",
-        defaultBaseUrl = "https://api.groq.com/openai/v1",
-        defaultModel = "llama-3.1-8b-instant",
-        isVisionCapable = false // Groq is text-only — never send images to Groq
+        isVisionCapable = true,
+        recommendedModels = listOf(
+            "gemini-2.0-flash" to "Gemini 2.0 Flash (Recommended · Multimodal)",
+            "gemini-2.5-flash" to "Gemini 2.5 Flash (Ultra-fast · Multimodal)",
+            "gemini-1.5-flash" to "Gemini 1.5 Flash (Legacy)",
+            "gemini-1.5-pro" to "Gemini 1.5 Pro (Deep Reasoning)"
+        )
     ),
     OPENROUTER(
         displayName = "OpenRouter",
         defaultBaseUrl = "https://openrouter.ai/api/v1",
-        defaultModel = "openai/gpt-4o-mini",
-        isVisionCapable = true
+        defaultModel = "nvidia/nemotron-3-super-120b-a12b:free",
+        isVisionCapable = true,
+        recommendedModels = listOf(
+            "nvidia/nemotron-3-super-120b-a12b:free" to "NVIDIA: Nemotron 3 Super (Free · 120B Translate)",
+            "google/gemini-2.0-flash-exp:free" to "Gemini 2.0 Flash Exp (Free · Vision + Translate)",
+            "meta-llama/llama-3.3-70b-instruct:free" to "Meta: Llama 3.3 70B Instruct (Free)",
+            "qwen/qwen-2.5-vl-72b-instruct:free" to "Qwen 2.5 VL 72B (Free · Vision + Translate)",
+            "deepseek/deepseek-chat:free" to "DeepSeek V3 (Free · Translate)",
+            "openai/gpt-4o-mini" to "OpenAI: GPT-4o Mini (Paid)"
+        )
+    ),
+    GROQ(
+        displayName = "Groq",
+        defaultBaseUrl = "https://api.groq.com/openai/v1",
+        defaultModel = "llama-3.3-70b-versatile",
+        isVisionCapable = false, // Groq is text-only — never send images to Groq
+        recommendedModels = listOf(
+            "llama-3.3-70b-versatile" to "Llama 3.3 70B Versatile (Fast & Free)",
+            "llama-3.1-8b-instant" to "Llama 3.1 8B Instant (Free)",
+            "gemma2-9b-it" to "Gemma 2 9B IT (Free)"
+        )
     ),
     CUSTOM(
         displayName = "Custom",
         defaultBaseUrl = "",
         defaultModel = "",
-        isVisionCapable = true
+        isVisionCapable = true,
+        recommendedModels = emptyList()
     );
 
     companion object {

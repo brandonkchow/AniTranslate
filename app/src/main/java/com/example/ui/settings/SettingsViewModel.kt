@@ -17,6 +17,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
+
 data class SlotTestResult(
     val slotId: String,
     val isTesting: Boolean = false,
@@ -35,12 +39,15 @@ data class SettingsUiState(
 
 class SettingsViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val slotStorage = SlotStorage(application)
+    private val slotStorage = SlotStorage.getInstance(application)
     private val geminiClient = GeminiClient()
     private val openAiClient = OpenAiCompatibleClient()
 
     private val _testResults = MutableStateFlow<Map<String, SlotTestResult>>(emptyMap())
     val testResults: StateFlow<Map<String, SlotTestResult>> = _testResults.asStateFlow()
+
+    private val _saveFeedback = MutableSharedFlow<String>()
+    val saveFeedback: SharedFlow<String> = _saveFeedback.asSharedFlow()
 
     private val _uiState = MutableStateFlow(
         SettingsUiState(
@@ -94,14 +101,36 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     fun addSlot(slot: ApiSlot) {
         slotStorage.addSlot(slot)
+        viewModelScope.launch {
+            _saveFeedback.emit("New slot '${slot.displayTitle}' added and saved.")
+        }
     }
 
     fun deleteSlot(slotId: String) {
         slotStorage.deleteSlot(slotId)
+        viewModelScope.launch {
+            _saveFeedback.emit("Slot removed.")
+        }
     }
 
     fun moveSlot(fromIndex: Int, toIndex: Int) {
         slotStorage.moveSlot(fromIndex, toIndex)
+    }
+
+    fun saveAllSettings() {
+        slotStorage.saveSlots(_uiState.value.slots)
+        val validCount = _uiState.value.slots.count { it.enabled && it.apiKey.isNotBlank() }
+        viewModelScope.launch {
+            _saveFeedback.emit("✓ Settings saved! ($validCount active API ${if (validCount == 1) "key" else "keys"} ready)")
+        }
+    }
+
+    fun resetToDefaultRecommendedSlots() {
+        val defaults = slotStorage.createDefaultSlots()
+        slotStorage.saveSlots(defaults)
+        viewModelScope.launch {
+            _saveFeedback.emit("Reset to default slots (Priority #1 OpenRouter Nemotron + Priority #2 Gemini 2.0 Flash).")
+        }
     }
 
     fun testSlotKey(slot: ApiSlot) {

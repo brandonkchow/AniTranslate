@@ -30,7 +30,7 @@ class HomeViewModelTest {
     @Before
     fun setup() {
         application = ApplicationProvider.getApplicationContext()
-        slotStorage = SlotStorage(application)
+        slotStorage = SlotStorage.getInstance(application)
         viewModel = HomeViewModel(application)
     }
 

@@ -41,29 +41,42 @@ data class HomeUiState(
     val isCreatingJob: Boolean = false,
     val recentJobs: List<JobEntity> = emptyList()
 ) {
+    val configuredSlots: List<ApiSlot>
+        get() = slots.filter { it.enabled && it.apiKey.isNotBlank() && !it.isInvalidKey }
+
+    val visionSlots: List<ApiSlot>
+        get() = configuredSlots.filter { (it.role == SlotRole.DETECT_OCR || it.role == SlotRole.ANY) && it.isVisionSupported }
+
+    val translateSlots: List<ApiSlot>
+        get() = configuredSlots.filter { it.role == SlotRole.TRANSLATE || it.role == SlotRole.ANY }
+
     val hasVisionKey: Boolean
-        get() = slots.any { it.enabled && it.apiKey.isNotBlank() && !it.isInvalidKey && (it.role == SlotRole.DETECT_OCR || it.role == SlotRole.ANY) && it.isVisionSupported }
+        get() = visionSlots.isNotEmpty()
 
     val hasTranslateKey: Boolean
-        get() = slots.any { it.enabled && it.apiKey.isNotBlank() && !it.isInvalidKey && (it.role == SlotRole.TRANSLATE || it.role == SlotRole.ANY) }
+        get() = translateSlots.isNotEmpty()
 
     val canTranslate: Boolean
         get() = selectedImages.isNotEmpty() && hasVisionKey && hasTranslateKey && !isCreatingJob
 
     val keyStatusMessage: String
         get() = when {
-            slots.none { it.apiKey.isNotBlank() } -> "No API keys configured. Visit Settings to add your key."
-            !hasVisionKey && !hasTranslateKey -> "Needs at least 1 vision key (Gemini/OpenRouter) and 1 translate key."
-            !hasVisionKey -> "Missing enabled Detect+OCR key (e.g. Gemini)."
-            !hasTranslateKey -> "Missing enabled Translate key (e.g. Gemini, Groq, OpenRouter)."
-            else -> "Ready to translate"
+            configuredSlots.isEmpty() -> "No active API keys detected. Tap here to configure Gemini or OpenRouter in Settings."
+            !hasVisionKey && !hasTranslateKey -> "Key entered, but no active role matched. Please enable vision or translate roles."
+            !hasVisionKey -> "Translation key ready (${translateSlots.firstOrNull()?.displayTitle ?: "Ready"}). Add a Vision key (e.g. Gemini 2.0 Flash) for Detect+OCR."
+            !hasTranslateKey -> "Vision key ready (${visionSlots.firstOrNull()?.displayTitle ?: "Ready"}). Add a Translation key (e.g. Nemotron / Gemini) for text translation."
+            else -> {
+                val primaryVision = visionSlots.first().displayTitle
+                val primaryTranslate = translateSlots.first().displayTitle
+                "Ready! Detect+OCR: $primaryVision · Translate: $primaryTranslate"
+            }
         }
 }
 
 class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     private val db = AppDatabase.getInstance(application)
-    private val slotStorage = SlotStorage(application)
+    private val slotStorage = SlotStorage.getInstance(application)
 
     private val _selectedImages = MutableStateFlow<List<SelectedImageItem>>(emptyList())
     private val _isCreatingJob = MutableStateFlow(false)

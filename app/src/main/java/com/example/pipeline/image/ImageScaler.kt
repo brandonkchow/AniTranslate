@@ -17,22 +17,18 @@ object ImageScaler {
 
     suspend fun loadAndCacheOriginal(context: Context, uri: Uri, targetFile: File): Bitmap? = withContext(Dispatchers.IO) {
         try {
-            val bitmap = context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                val options = BitmapFactory.Options().apply {
-                    inPreferredConfig = Bitmap.Config.ARGB_8888
-                    inMutable = true
-                }
-                BitmapFactory.decodeStream(inputStream, null, options)
-            }
+            val bytes = context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                inputStream.readBytes()
+            } ?: return@withContext null
 
-            if (bitmap != null) {
-                targetFile.parentFile?.mkdirs()
-                FileOutputStream(targetFile).use { out ->
-                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
-                    out.flush()
-                }
+            targetFile.parentFile?.mkdirs()
+            targetFile.writeBytes(bytes)
+
+            val options = BitmapFactory.Options().apply {
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+                inMutable = true
             }
-            bitmap
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
         } catch (e: Exception) {
             null
         }
@@ -83,11 +79,12 @@ object ImageScaler {
     suspend fun loadBitmapFromFile(file: File): Bitmap? = withContext(Dispatchers.IO) {
         if (!file.exists()) return@withContext null
         try {
+            val bytes = file.readBytes()
             val options = BitmapFactory.Options().apply {
                 inPreferredConfig = Bitmap.Config.ARGB_8888
                 inMutable = true
             }
-            BitmapFactory.decodeFile(file.absolutePath, options)
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
         } catch (e: Exception) {
             null
         }

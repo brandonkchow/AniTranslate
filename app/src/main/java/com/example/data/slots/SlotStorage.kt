@@ -10,7 +10,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONArray
 
-class SlotStorage(private val context: Context) {
+class SlotStorage private constructor(private val context: Context) {
 
     private val prefs: SharedPreferences by lazy {
         try {
@@ -63,33 +63,24 @@ class SlotStorage(private val context: Context) {
         return loaded
     }
 
-    private fun createDefaultSlots(): List<ApiSlot> {
+    fun createDefaultSlots(): List<ApiSlot> {
         return listOf(
             ApiSlot(
+                provider = ApiProvider.OPENROUTER,
+                label = "NVIDIA: Nemotron 3 Super (free)",
+                apiKey = "",
+                model = "nvidia/nemotron-3-super-120b-a12b:free",
+                baseUrl = "https://openrouter.ai/api/v1",
+                role = SlotRole.TRANSLATE,
+                enabled = true
+            ),
+            ApiSlot(
                 provider = ApiProvider.GEMINI,
-                label = "Gemini Flash",
+                label = "Gemini 2.0 Flash",
                 apiKey = "",
                 model = "gemini-2.0-flash",
                 baseUrl = "https://generativelanguage.googleapis.com/v1beta",
                 role = SlotRole.ANY,
-                enabled = true
-            ),
-            ApiSlot(
-                provider = ApiProvider.GROQ,
-                label = "Groq Llama",
-                apiKey = "",
-                model = "llama-3.1-8b-instant",
-                baseUrl = "https://api.groq.com/openai/v1",
-                role = SlotRole.TRANSLATE,
-                enabled = true
-            ),
-            ApiSlot(
-                provider = ApiProvider.OPENROUTER,
-                label = "OpenRouter GPT-4o-mini",
-                apiKey = "",
-                model = "openai/gpt-4o-mini",
-                baseUrl = "https://openrouter.ai/api/v1",
-                role = SlotRole.TRANSLATE,
                 enabled = true
             )
         )
@@ -174,5 +165,14 @@ class SlotStorage(private val context: Context) {
 
     companion object {
         private const val KEY_SLOTS = "api_slots_v1"
+
+        @Volatile
+        private var INSTANCE: SlotStorage? = null
+
+        fun getInstance(context: Context): SlotStorage {
+            return INSTANCE ?: synchronized(this) {
+                INSTANCE ?: SlotStorage(context.applicationContext).also { INSTANCE = it }
+            }
+        }
     }
 }

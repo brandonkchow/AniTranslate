@@ -48,7 +48,7 @@ class JobViewModel(
 ) : AndroidViewModel(application) {
 
     private val db = AppDatabase.getInstance(application)
-    private val slotStorage = SlotStorage(application)
+    private val slotStorage = SlotStorage.getInstance(application)
     private val jobManager = JobManager(application, db.jobDao(), slotStorage)
 
     private val _isExporting = MutableStateFlow(false)

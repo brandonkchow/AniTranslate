@@ -84,6 +84,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -111,6 +112,14 @@ import com.example.ui.theme.EditorialTextMuted
 import com.example.ui.theme.EditorialTextPrimary
 import com.example.ui.theme.EditorialTextSecondary
 
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Restore
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.flow.collectLatest
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
@@ -119,10 +128,20 @@ fun SettingsScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val testResults by viewModel.testResults.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val context = LocalContext.current
     var showAddSlotDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        viewModel.saveFeedback.collectLatest { msg ->
+            snackbarHostState.showSnackbar(msg)
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+        }
+    }
 
     Scaffold(
         modifier = Modifier.testTag("settings_screen"),
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = {
@@ -146,6 +165,25 @@ fun SettingsScreen(
                             contentDescription = "Back",
                             tint = EditorialTextPrimary
                         )
+                    }
+                },
+                actions = {
+                    Button(
+                        onClick = { viewModel.saveAllSettings() },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = EditorialLavender,
+                            contentColor = EditorialDeepViolet
+                        ),
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        modifier = Modifier
+                            .height(34.dp)
+                            .padding(end = 8.dp)
+                            .testTag("save_all_top_button")
+                    ) {
+                        Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Save Keys", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -188,7 +226,7 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.width(12.dp))
                     Column {
                         Text(
-                            text = "BYOK ENCRYPTED STORAGE",
+                            text = "BYOK ENCRYPTED STORAGE & PRIORITY",
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             letterSpacing = 1.sp,
@@ -196,7 +234,7 @@ fun SettingsScreen(
                         )
                         Spacer(modifier = Modifier.height(3.dp))
                         Text(
-                            text = "Keys stay in EncryptedSharedPreferences on this device. Providers may bill you. Do not share copyrighted pages if you lack rights.",
+                            text = "Keys are securely persisted on your device. The app runs models in order of priority: Slot #1 runs first; if cooling or busy, fallback to Slot #2.",
                             style = MaterialTheme.typography.bodySmall,
                             color = EditorialTextSecondary
                         )
@@ -204,46 +242,63 @@ fun SettingsScreen(
                 }
             }
 
-            // API Slots Header
-            Row(
+            // API Slots Header with Actions
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Column {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Text(
-                        text = "API KEY SLOTS (${uiState.slots.size})",
-                        style = MaterialTheme.typography.labelSmall,
+                        text = "MODEL PRIORITY & KEYS (${uiState.slots.size})",
+                        style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 1.sp,
                         color = EditorialLavender
                     )
-                    Text(
-                        text = "List order is fallback order. Top slot runs first.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = EditorialTextMuted
-                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextButton(
+                            onClick = { viewModel.resetToDefaultRecommendedSlots() },
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                            colors = ButtonDefaults.textButtonColors(contentColor = EditorialTextSecondary)
+                        ) {
+                            Icon(Icons.Default.Restore, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Reset Defaults", fontSize = 11.sp)
+                        }
+
+                        Button(
+                            onClick = { showAddSlotDialog = true },
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier.testTag("add_slot_button"),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = EditorialLavender,
+                                contentColor = EditorialDeepViolet
+                            )
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Add Slot", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
-                Button(
-                    onClick = { showAddSlotDialog = true },
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                    modifier = Modifier
-                        .height(34.dp)
-                        .testTag("add_slot_button"),
-                    shape = RoundedCornerShape(10.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = EditorialLavender,
-                        contentColor = EditorialDeepViolet
-                    )
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Add Slot", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                }
+                Text(
+                    text = "List order is fallback order. Top slot (Priority #1) runs first; if busy or cooling down, the pipeline falls back to the next slot.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = EditorialTextMuted,
+                    lineHeight = 16.sp
+                )
             }
 
             // Slot items list
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 uiState.slots.forEachIndexed { index, slot ->
                     ApiSlotCard(
                         slot = slot,
@@ -257,6 +312,28 @@ fun SettingsScreen(
                         onTestKey = { viewModel.testSlotKey(slot) }
                     )
                 }
+            }
+
+            // Prominent Save & Apply Button
+            Button(
+                onClick = { viewModel.saveAllSettings() },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = EditorialLavender,
+                    contentColor = EditorialDeepViolet
+                ),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .testTag("save_and_apply_button")
+            ) {
+                Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Save & Apply All Changes",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp
+                )
             }
 
             Spacer(modifier = Modifier.height(4.dp))
@@ -708,85 +785,141 @@ fun ApiSlotCard(
             .fillMaxWidth()
             .testTag("slot_card_${slot.id}"),
         colors = CardDefaults.cardColors(
-            containerColor = if (slot.isInvalidKey) EditorialCrimson.copy(alpha = 0.15f)
+            containerColor = if (slot.isInvalidKey) EditorialCrimson.copy(alpha = 0.12f)
             else if (!slot.enabled) EditorialSurface.copy(alpha = 0.5f)
             else EditorialSurface
         ),
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(16.dp),
         border = androidx.compose.foundation.BorderStroke(
             1.dp,
             if (slot.isInvalidKey) EditorialCrimsonBorder
             else if (slot.isCoolingDown()) EditorialAmber
-            else EditorialSurfaceBorder.copy(alpha = 0.35f)
+            else EditorialSurfaceBorder.copy(alpha = 0.45f)
         )
     ) {
-        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            // Header Row: Priority tag, Label/Provider, Enabled switch
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            // Row 1: Priority Badge + Role Pill on Left, Reorder Arrows + Switch on Right
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     Surface(
-                        color = EditorialDeepViolet,
-                        shape = RoundedCornerShape(6.dp)
+                        color = if (index == 0) EditorialLavender else EditorialDeepViolet,
+                        shape = RoundedCornerShape(8.dp)
                     ) {
                         Text(
-                            text = "#${index + 1}",
-                            color = EditorialLavender,
+                            text = if (index == 0) "Priority #1 (Primary)" else "Priority #${index + 1} (Fallback)",
+                            color = if (index == 0) EditorialDeepViolet else EditorialLavender,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 12.sp,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            fontSize = 11.sp,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                         )
                     }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Column {
+
+                    Surface(
+                        color = EditorialSurfaceAlt,
+                        shape = RoundedCornerShape(6.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, EditorialSurfaceBorder.copy(alpha = 0.4f))
+                    ) {
                         Text(
-                            text = slot.displayTitle,
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = EditorialTextPrimary
+                            text = slot.role.displayName,
+                            fontSize = 11.sp,
+                            color = EditorialTextSecondary,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
                         )
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Surface(
-                                color = EditorialSurfaceBorder.copy(alpha = 0.5f),
-                                shape = RoundedCornerShape(4.dp)
-                            ) {
-                                Text(
-                                    text = slot.role.displayName,
-                                    fontSize = 10.sp,
-                                    color = EditorialTextSecondary,
-                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                                )
-                            }
-                            if (slot.isInvalidKey) {
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(text = "• Invalid Key (401)", color = EditorialCrimsonLight, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            } else if (slot.isCoolingDown()) {
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(text = "• Cooldown (${slot.remainingCooldownSeconds()}s)", color = EditorialAmber, fontSize = 11.sp)
-                            }
-                        }
                     }
                 }
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    IconButton(
+                        onClick = onMoveUp,
+                        enabled = index > 0,
+                        modifier = Modifier.size(34.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ArrowUpward,
+                            contentDescription = "Move Priority Up",
+                            tint = if (index > 0) EditorialLavender else EditorialTextMuted.copy(alpha = 0.25f),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = onMoveDown,
+                        enabled = index < totalSlots - 1,
+                        modifier = Modifier.size(34.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ArrowDownward,
+                            contentDescription = "Move Priority Down",
+                            tint = if (index < totalSlots - 1) EditorialLavender else EditorialTextMuted.copy(alpha = 0.25f),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(6.dp))
                     Switch(
                         checked = slot.enabled,
                         onCheckedChange = { onUpdate(slot.copy(enabled = it)) },
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = EditorialLavender,
-                            checkedTrackColor = EditorialDeepViolet
+                            checkedTrackColor = EditorialDeepViolet,
+                            uncheckedTrackColor = EditorialCanvas
                         )
                     )
                 }
             }
 
-            // API Key Input Row (always visible)
+            // Row 2: Provider / Model Title & Status Subtitle
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    text = slot.displayTitle,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = EditorialTextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = "Model: ${slot.model}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = EditorialTextMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp
+                    )
+                    if (slot.isInvalidKey) {
+                        Text(text = "• Invalid Key", color = EditorialCrimsonLight, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    } else if (slot.isCoolingDown()) {
+                        Text(text = "• Cooldown (${slot.remainingCooldownSeconds()}s)", color = EditorialAmber, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                    }
+                }
+            }
+
+            // Row 3: API Key Input Box
             OutlinedTextField(
                 value = slot.apiKey,
-                onValueChange = { onUpdate(slot.copy(apiKey = it, isInvalidKey = false)) },
+                onValueChange = { onUpdate(slot.copy(apiKey = it.trim(), isInvalidKey = false)) },
                 label = { Text("API Key") },
                 placeholder = { Text("Paste your API key here") },
                 singleLine = true,
@@ -801,87 +934,159 @@ fun ApiSlotCard(
                         )
                     }
                 },
+                shape = RoundedCornerShape(12.dp),
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("api_key_input_${slot.id}")
             )
 
-            // Test Key Button & Result
+            // Row 4: Action Buttons (Test Key + Status badge + Configure Model)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                OutlinedButton(
-                    onClick = onTestKey,
-                    enabled = slot.apiKey.isNotBlank() && testResult?.isTesting != true,
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                    modifier = Modifier.height(34.dp),
-                    shape = RoundedCornerShape(8.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, EditorialLavender.copy(alpha = 0.6f))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    if (testResult?.isTesting == true) {
-                        CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = EditorialLavender)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Testing...", fontSize = 12.sp, color = EditorialLavender)
-                    } else {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null, tint = EditorialLavender, modifier = Modifier.size(14.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Test Key", fontSize = 12.sp, color = EditorialLavender, fontWeight = FontWeight.Bold)
-                    }
-                }
-
-                // Test result chip
-                if (testResult != null && !testResult.isTesting) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(start = 8.dp)
+                    OutlinedButton(
+                        onClick = onTestKey,
+                        enabled = slot.apiKey.isNotBlank() && testResult?.isTesting != true,
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                        modifier = Modifier.height(36.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, EditorialLavender.copy(alpha = 0.6f))
                     ) {
-                        Icon(
-                            imageVector = if (testResult.isSuccess == true) Icons.Default.CheckCircle else Icons.Default.Error,
-                            contentDescription = null,
-                            tint = if (testResult.isSuccess == true) EditorialSuccess else EditorialCrimsonLight,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = if (testResult.isSuccess == true) "Valid" else "Failed",
-                            color = if (testResult.isSuccess == true) EditorialSuccess else EditorialCrimsonLight,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
+                        if (testResult?.isTesting == true) {
+                            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = EditorialLavender)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Testing...", fontSize = 12.sp, color = EditorialLavender)
+                        } else {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = EditorialLavender, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Test Key", fontSize = 12.sp, color = EditorialLavender, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    // Test result chip
+                    if (testResult != null && !testResult.isTesting) {
+                        Surface(
+                            color = if (testResult.isSuccess == true) EditorialSuccess.copy(alpha = 0.15f) else EditorialCrimson.copy(alpha = 0.15f),
+                            shape = RoundedCornerShape(6.dp),
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                if (testResult.isSuccess == true) EditorialSuccess.copy(alpha = 0.4f) else EditorialCrimsonBorder
+                            )
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (testResult.isSuccess == true) Icons.Default.CheckCircle else Icons.Default.Error,
+                                    contentDescription = null,
+                                    tint = if (testResult.isSuccess == true) EditorialSuccess else EditorialCrimsonLight,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = if (testResult.isSuccess == true) "Valid" else "Failed",
+                                    color = if (testResult.isSuccess == true) EditorialSuccess else EditorialCrimsonLight,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
                     }
                 }
 
                 // Expand / Collapse Details Button
                 TextButton(
                     onClick = { isExpanded = !isExpanded },
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                    modifier = Modifier.height(34.dp)
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    modifier = Modifier.height(36.dp),
+                    colors = ButtonDefaults.textButtonColors(contentColor = EditorialTextSecondary)
                 ) {
-                    Text(if (isExpanded) "Hide Config" else "Configure", fontSize = 12.sp, color = EditorialTextSecondary)
+                    Text(if (isExpanded) "Hide Config" else "Configure Model", fontSize = 12.sp, fontWeight = FontWeight.Medium)
                 }
             }
 
-            // Expanded Configuration options
+            // Expanded Configuration options with clean spacing
             AnimatedVisibility(visible = isExpanded) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    // Label
-                    OutlinedTextField(
-                        value = slot.label,
-                        onValueChange = { onUpdate(slot.copy(label = it)) },
-                        label = { Text("Slot Label (Optional)") },
-                        placeholder = { Text("e.g. My Fast Gemini Key") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // Recommended Model Presets Chips
+                    if (slot.provider.recommendedModels.isNotEmpty()) {
+                        Text(
+                            text = "Recommended Model Presets",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = EditorialLavender,
+                            letterSpacing = 0.5.sp
+                        )
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            slot.provider.recommendedModels.forEach { (modelId, modelTitle) ->
+                                Surface(
+                                    color = if (slot.model == modelId) EditorialDeepViolet else EditorialCanvas,
+                                    shape = RoundedCornerShape(10.dp),
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        1.dp,
+                                        if (slot.model == modelId) EditorialLavender else EditorialSurfaceBorder.copy(alpha = 0.5f)
+                                    ),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            onUpdate(slot.copy(model = modelId))
+                                        }
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = modelTitle,
+                                            fontSize = 12.sp,
+                                            fontWeight = if (slot.model == modelId) FontWeight.Bold else FontWeight.Normal,
+                                            color = if (slot.model == modelId) EditorialLavender else EditorialTextPrimary
+                                        )
+                                        if (slot.model == modelId) {
+                                            Icon(
+                                                imageVector = Icons.Default.Check,
+                                                contentDescription = "Selected",
+                                                tint = EditorialLavender,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
 
                     // Model String
                     OutlinedTextField(
                         value = slot.model,
                         onValueChange = { onUpdate(slot.copy(model = it)) },
-                        label = { Text("Model String") },
+                        label = { Text("Model Identifier") },
                         singleLine = true,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    // Label
+                    OutlinedTextField(
+                        value = slot.label,
+                        onValueChange = { onUpdate(slot.copy(label = it)) },
+                        label = { Text("Custom Display Label (Optional)") },
+                        placeholder = { Text("e.g. NVIDIA Nemotron Super") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
 
@@ -889,17 +1094,19 @@ fun ApiSlotCard(
                     OutlinedTextField(
                         value = slot.baseUrl,
                         onValueChange = { onUpdate(slot.copy(baseUrl = it)) },
-                        label = { Text("Base URL") },
+                        label = { Text("Base API Endpoint URL") },
                         singleLine = true,
+                        shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
 
                     // Role selector
                     Text(
                         text = "Assigned Role",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = EditorialTextMuted
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = EditorialLavender,
+                        letterSpacing = 0.5.sp
                     )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -920,34 +1127,19 @@ fun ApiSlotCard(
                         }
                     }
 
-                    // Bottom action buttons: Move up, Move down, Delete
+                    // Delete Slot button
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                        horizontalArrangement = Arrangement.End,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            IconButton(
-                                onClick = onMoveUp,
-                                enabled = index > 0,
-                                modifier = Modifier.size(32.dp)
-                            ) {
-                                Icon(Icons.Default.ArrowUpward, contentDescription = "Move Up", modifier = Modifier.size(18.dp))
-                            }
-                            IconButton(
-                                onClick = onMoveDown,
-                                enabled = index < totalSlots - 1,
-                                modifier = Modifier.size(32.dp)
-                            ) {
-                                Icon(Icons.Default.ArrowDownward, contentDescription = "Move Down", modifier = Modifier.size(18.dp))
-                            }
-                        }
-
-                        IconButton(
+                        TextButton(
                             onClick = onDelete,
-                            modifier = Modifier.size(32.dp)
+                            colors = ButtonDefaults.textButtonColors(contentColor = EditorialCrimsonLight)
                         ) {
-                            Icon(Icons.Default.Delete, contentDescription = "Delete Slot", tint = EditorialCrimsonLight, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Default.Delete, contentDescription = "Delete Slot", modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Delete Slot", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -956,28 +1148,38 @@ fun ApiSlotCard(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun AddSlotDialog(
     onDismiss: () -> Unit,
     onConfirm: (ApiSlot) -> Unit
 ) {
-    var selectedProvider by remember { mutableStateOf(ApiProvider.GEMINI) }
+    var selectedProvider by remember { mutableStateOf(ApiProvider.OPENROUTER) }
     var label by remember { mutableStateOf("") }
     var apiKey by remember { mutableStateOf("") }
-    var model by remember { mutableStateOf(ApiProvider.GEMINI.defaultModel) }
-    var baseUrl by remember { mutableStateOf(ApiProvider.GEMINI.defaultBaseUrl) }
-    var role by remember { mutableStateOf(SlotRole.ANY) }
+    var model by remember { mutableStateOf(ApiProvider.OPENROUTER.defaultModel) }
+    var baseUrl by remember { mutableStateOf(ApiProvider.OPENROUTER.defaultBaseUrl) }
+    var role by remember { mutableStateOf(SlotRole.TRANSLATE) }
     var isProviderDropdownExpanded by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Add API Slot", color = EditorialTextPrimary) },
-        containerColor = EditorialSurfaceAlt,
+        shape = RoundedCornerShape(20.dp),
+        containerColor = EditorialSurface,
+        title = {
+            Text(
+                text = "Add Model Slot",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = EditorialTextPrimary
+            )
+        },
         text = {
             Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 // Provider Selector
                 ExposedDropdownMenuBox(
@@ -988,8 +1190,9 @@ fun AddSlotDialog(
                         value = selectedProvider.displayName,
                         onValueChange = {},
                         readOnly = true,
-                        label = { Text("Provider") },
+                        label = { Text("Provider Engine") },
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = isProviderDropdownExpanded) },
+                        shape = RoundedCornerShape(12.dp),
                         modifier = Modifier
                             .menuAnchor(MenuAnchorType.PrimaryNotEditable)
                             .fillMaxWidth()
@@ -1000,15 +1203,63 @@ fun AddSlotDialog(
                     ) {
                         ApiProvider.entries.forEach { provider ->
                             DropdownMenuItem(
-                                text = { Text(provider.displayName) },
+                                text = { Text(provider.displayName, fontWeight = FontWeight.Medium) },
                                 onClick = {
                                     selectedProvider = provider
                                     model = provider.defaultModel
                                     baseUrl = provider.defaultBaseUrl
-                                    role = if (provider == ApiProvider.GROQ) SlotRole.TRANSLATE else SlotRole.ANY
+                                    role = if (provider == ApiProvider.GROQ || provider == ApiProvider.OPENROUTER) SlotRole.TRANSLATE else SlotRole.ANY
                                     isProviderDropdownExpanded = false
                                 }
                             )
+                        }
+                    }
+                }
+
+                // Recommended Presets
+                if (selectedProvider.recommendedModels.isNotEmpty()) {
+                    Text(
+                        text = "Quick Presets:",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = EditorialLavender
+                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        selectedProvider.recommendedModels.forEach { (presetModelId, presetLabel) ->
+                            Surface(
+                                color = if (model == presetModelId) EditorialDeepViolet else EditorialCanvas,
+                                shape = RoundedCornerShape(8.dp),
+                                border = androidx.compose.foundation.BorderStroke(
+                                    1.dp,
+                                    if (model == presetModelId) EditorialLavender else EditorialSurfaceBorder.copy(alpha = 0.4f)
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        model = presetModelId
+                                    }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = presetLabel,
+                                        fontSize = 11.sp,
+                                        fontWeight = if (model == presetModelId) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (model == presetModelId) EditorialLavender else EditorialTextPrimary
+                                    )
+                                    if (model == presetModelId) {
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = null,
+                                            tint = EditorialLavender,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -1017,9 +1268,10 @@ fun AddSlotDialog(
                 OutlinedTextField(
                     value = label,
                     onValueChange = { label = it },
-                    label = { Text("Label (Optional)") },
-                    placeholder = { Text("e.g. My Backup Gemini") },
+                    label = { Text("Slot Label (Optional)") },
+                    placeholder = { Text("e.g. Primary Nemotron") },
                     singleLine = true,
+                    shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth()
                 )
 
@@ -1028,8 +1280,9 @@ fun AddSlotDialog(
                     value = apiKey,
                     onValueChange = { apiKey = it },
                     label = { Text("API Key") },
-                    placeholder = { Text("Paste key") },
+                    placeholder = { Text("Paste API key here") },
                     singleLine = true,
+                    shape = RoundedCornerShape(10.dp),
                     visualTransformation = PasswordVisualTransformation(),
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -1038,8 +1291,9 @@ fun AddSlotDialog(
                 OutlinedTextField(
                     value = model,
                     onValueChange = { model = it },
-                    label = { Text("Model String") },
+                    label = { Text("Model Identifier") },
                     singleLine = true,
+                    shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth()
                 )
 
@@ -1049,12 +1303,21 @@ fun AddSlotDialog(
                     onValueChange = { baseUrl = it },
                     label = { Text("Base URL") },
                     singleLine = true,
+                    shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth()
                 )
 
                 // Role
-                Text("Role", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, color = EditorialTextSecondary)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = "Slot Role",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = EditorialLavender
+                )
+                androidx.compose.foundation.layout.FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
                     SlotRole.entries.forEach { r ->
                         val isSupported = (r != SlotRole.DETECT_OCR && r != SlotRole.ANY) || selectedProvider.isVisionCapable
                         FilterChip(
@@ -1077,27 +1340,33 @@ fun AddSlotDialog(
                     val finalSlot = ApiSlot(
                         provider = selectedProvider,
                         label = label,
-                        apiKey = apiKey,
-                        model = model,
-                        baseUrl = baseUrl,
+                        apiKey = apiKey.trim(),
+                        model = model.trim(),
+                        baseUrl = baseUrl.trim(),
                         role = role,
                         enabled = true
                     )
                     onConfirm(finalSlot)
                 },
+                shape = RoundedCornerShape(10.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = EditorialLavender,
                     contentColor = EditorialDeepViolet
-                )
+                ),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 8.dp)
             ) {
-                Text("Add", fontWeight = FontWeight.Bold)
+                Text("Add Slot", fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(
+                onClick = onDismiss,
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+            ) {
                 Text("Cancel", color = EditorialTextSecondary)
             }
         }
     )
 }
+
 
