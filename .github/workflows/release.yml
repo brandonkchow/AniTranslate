@@ -3,8 +3,17 @@ name: Build & Release APK
 on:
   push:
     tags:
-      - 'v*' # Trigger on version tags like v1.0.0, v1.0, etc.
+      - 'v*' # Trigger on version tags like v1.0.0, v1.0.1, etc.
   workflow_dispatch: # Allow manual trigger from GitHub Actions tab
+    inputs:
+      version_tag:
+        description: 'Version tag (e.g. v1.0.1). Leave empty to auto-generate from run number.'
+        required: false
+        default: ''
+      release_title:
+        description: 'Release Title (e.g. AniTranslate v1.0.1). Leave empty for default.'
+        required: false
+        default: ''
 
 jobs:
   build-apk:
@@ -89,15 +98,35 @@ jobs:
           name: manga-translator-apk
           path: ${{ steps.locate-apk.outputs.apk_path }}
 
+      - name: Determine Version Tag & Title
+        id: release-info
+        run: |
+          if [ -n "${{ inputs.version_tag }}" ]; then
+            TAG="${{ inputs.version_tag }}"
+          elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            TAG="v1.0.${{ github.run_number }}"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+          if [ -n "${{ inputs.release_title }}" ]; then
+            TITLE="${{ inputs.release_title }}"
+          else
+            TITLE="Release $TAG"
+          fi
+          echo "title=$TITLE" >> $GITHUB_OUTPUT
+
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ steps.locate-apk.outputs.apk_path }}
-          tag_name: ${{ github.ref_name || 'v1.0.0' }}
-          name: Release ${{ github.ref_name || 'v1.0.0' }}
+          tag_name: ${{ steps.release-info.outputs.tag }}
+          name: ${{ steps.release-info.outputs.title }}
           draft: false
           prerelease: false
+          make_latest: true
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
