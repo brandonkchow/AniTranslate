@@ -1,6 +1,6 @@
 # Manga Translator — AI Assistant & Agent Guidelines
 
-Refer to `AGENTS.md` for full architectural standards, test suites, and the **Iteration Flywheel** specifications.
+Refer to `AGENTS.md` for full architectural standards, test suites, reading-order sorting specifications, and the **Iteration Flywheel** guidelines.
 
 ### Core Commands & Flywheel Execution
 - **Run Pipeline & Flywheel Tests**: `gradle :app:testDebugUnitTest --tests "com.example.MangaDetectionIntegrationTest"`

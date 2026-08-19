@@ -1,6 +1,6 @@
 # Manga Translator — Engineering & Iteration Flywheel Guidelines
 
-Welcome to the Manga Translator codebase. This document codifies the engineering standards, architecture, testing frameworks, and the **Continuous Iteration Flywheel** used to continuously benchmark, evaluate, and refine manga OCR, bubble detection, speech bubble wiping, and multi-line comic typesetting.
+Welcome to the Manga Translator codebase. This document codifies the engineering standards, architecture, testing frameworks, translation localization guidelines, and the **Continuous Iteration Flywheel** used to continuously benchmark, evaluate, and refine manga OCR, bubble detection, speech bubble wiping, and multi-line comic typesetting.
 
 ---
 
@@ -45,17 +45,36 @@ Every developer and AI agent working on this codebase must follow the 5-step Ite
 
 ---
 
+## 📖 Manga Reading-Order & Holistic Translation Engine
+
+### 1. Authentic Manga Reading Order Sorting (`Bubble.sortByMangaReadingOrder`)
+- Japanese manga is read **Right-to-Left (RTL)** and **Top-to-Bottom (TTB)** across comic panels.
+- Dialogue bubbles must be sorted into tiered vertical panel bands. Within each band (`|y1 - y2| < 0.12`), rightmost bubbles (`x2` descending) take precedence before leftward bubbles.
+- Bounding boxes are renumbered sequentially (`id = 1..N`) so that translation models receive lines in the exact sequence the author intended them to be read.
+
+### 2. Intra-Page Holistic Scene Translation
+- Translating bubbles in isolation causes disjointed, robotic dialogue and pronoun confusion.
+- All bubbles on a single page are sent as a complete conversation thread to the model.
+- **Pronoun & Subject Resolution**: Japanese omitted subjects (私, 俺, 貴方, 彼, 彼女) and passive referents are resolved naturally using the whole-scene conversational context.
+- **Voice & Tone Consistency**: Character personality, comedic timing, emotional intensity, honorifics, and shout volume are preserved.
+
+### 3. Cross-Page Story Continuity & Memory Chaining
+- When translating multi-page chapters in `PagePipeline.kt`, dialogue from the preceding page is extracted and passed in as `storyContext`.
+- This ensures seamless continuity for multi-page monologues, scene transitions, character reveals, and consistent terminology across an entire chapter.
+
+---
+
 ## 🛠️ Pipeline Architecture & Key Modules
 
 1. **Detection & OCR (`com.example.net.GeminiClient`)**:
    - Sends image base64 to Gemini 2.5 Flash with structured JSON schema.
    - Extracts normalized `[ymin, xmin, ymax, xmax]` bounding boxes, Japanese text, and vertical/horizontal text flow orientation.
-   - Slot-based key management (`SlotStorage`) allows automatic retrieval of configured AI Studio secrets.
+   - Sorts detections in manga reading order via `Bubble.sortByMangaReadingOrder`.
 
 2. **Bubble Inpainting & Wiping (`com.example.pipeline.wipe.FlatWiper`)**:
    - Applies contour-safe insetting (`2–5px` density-scaled) to preserve hand-drawn speech balloon contours and frame borders.
    - Adapts to interior bubble backgrounds by sampling non-text pixels (`luminance >= 0.65`).
-   - Supports circular/oval masking and rounded-rectangle panel wiping.
+   - Maintains 100% pixel fidelity (`SSIM = 1.0`) on all non-bubble artwork.
 
 3. **Comic Typesetting Engine (`com.example.pipeline.typeset.Typesetter`)**:
    - Uses an 8-iteration **binary search** to find the optimal readable font size (0.5px precision) that fits both bubble width and height bounds.
@@ -88,5 +107,6 @@ Whenever the test suite executes (`gradle :app:testDebugUnitTest --tests "com.ex
 
 1. **Always Verify with Tests First**: Before declaring any change complete, execute `gradle :app:testDebugUnitTest` and `compile_applet`.
 2. **Never Break Non-Bubble Artwork**: The wiper and typesetter must only modify pixels inside valid speech bubble bounding boxes. Non-bubble artwork must maintain 100% pixel fidelity (SSIM = 1.0 outside bubbles).
-3. **Preserve Secrets & Multi-Provider Architecture**: Keep `SlotStorage` flexible for Gemini, OpenAI, Claude, DeepSeek, and custom endpoints.
-4. **Proactive Flywheel Improvements**: When you identify opportunities to improve text wrapping, font rendering, bubble masking, or test telemetry, implement the improvement, run the tests, and record the metrics in the flywheel scorecard.
+3. **Respect Manga Reading Order & Context**: Always sort speech bubbles with `Bubble.sortByMangaReadingOrder` and pass `storyContext` for multi-page translations.
+4. **Preserve Secrets & Multi-Provider Architecture**: Keep `SlotStorage` flexible for Gemini, OpenAI, Claude, DeepSeek, and custom endpoints.
+5. **Proactive Flywheel Improvements**: When you identify opportunities to improve text wrapping, font rendering, bubble masking, or test telemetry, implement the improvement, run the tests, and record the metrics in the flywheel scorecard.

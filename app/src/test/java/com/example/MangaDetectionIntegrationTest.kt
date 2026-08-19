@@ -360,6 +360,47 @@ class MangaDetectionIntegrationTest {
     }
 
     @Test
+    fun testCrossPageStoryContextAndReadingOrderPipeline() {
+        // 1. Verify reading order sorting
+        val unsortedBubbles = listOf(
+            Bubble(id = 10, text = "嘘だろ…", box = listOf(0.12f, 0.60f, 0.42f, 0.78f)), // bottom-left
+            Bubble(id = 20, text = "肉のことはいいから みんな逃げろ！", box = listOf(0.58f, 0.55f, 0.92f, 0.85f)), // bottom-right
+            Bubble(id = 30, text = "なんだよそれ 主なんじゃね！？", box = listOf(0.10f, 0.06f, 0.45f, 0.20f)), // top-left
+            Bubble(id = 40, text = "うますぎ警報 発令―――！！", box = listOf(0.65f, 0.05f, 0.90f, 0.22f)) // top-right
+        )
+
+        val sorted = Bubble.sortByMangaReadingOrder(unsortedBubbles)
+        assertEquals(4, sorted.size)
+        // Bubble 1 must be top-right
+        assertEquals("うますぎ警報 発令―――！！", sorted[0].text)
+        assertEquals(1, sorted[0].id)
+        // Bubble 2 must be top-left
+        assertEquals("なんだよそれ 主なんじゃね！？", sorted[1].text)
+        assertEquals(2, sorted[1].id)
+        // Bubble 3 must be bottom-right
+        assertEquals("肉のことはいいから みんな逃げろ！", sorted[2].text)
+        assertEquals(3, sorted[2].id)
+        // Bubble 4 must be bottom-left
+        assertEquals("嘘だろ…", sorted[3].text)
+        assertEquals(4, sorted[3].id)
+
+        // 2. Verify multi-page story context construction
+        val previousPageBubbles = listOf(
+            Bubble(id = 1, text = "誰だ お前は？", translated = "Who are you?", box = listOf(0.7f, 0.1f, 0.9f, 0.3f)),
+            Bubble(id = 2, text = "俺は伝説の勇者だ！", translated = "I'm the legendary hero!", box = listOf(0.1f, 0.1f, 0.3f, 0.3f))
+        )
+        val storyContext = buildString {
+            appendLine("Previous page (1) dialogue:")
+            previousPageBubbles.forEach { pb ->
+                appendLine("- \"${pb.translated}\" (Japanese: \"${pb.text}\")")
+            }
+        }
+
+        assertTrue("Story context must contain previous dialogue for pronoun resolution", storyContext.contains("legendary hero"))
+        assertTrue(storyContext.contains("Who are you?"))
+    }
+
+    @Test
     fun testLiveOrMockGeminiCallWithConfiguredKey() = runBlocking {
         val key = try {
             BuildConfig.GEMINI_API_KEY.takeIf { it.isNotBlank() && it != "MY_GEMINI_API_KEY" }

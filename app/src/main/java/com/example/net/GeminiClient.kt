@@ -113,8 +113,9 @@ class GeminiClient {
             }
 
             val textResponse = extractGeminiResponseText(body)
-            val bubbles = parseBubblesJson(textResponse)
-            Result.success(bubbles)
+            val rawBubbles = parseBubblesJson(textResponse)
+            val sortedBubbles = Bubble.sortByMangaReadingOrder(rawBubbles)
+            Result.success(sortedBubbles)
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -124,7 +125,8 @@ class GeminiClient {
         baseUrl: String,
         apiKey: String,
         model: String,
-        bubbles: List<Bubble>
+        bubbles: List<Bubble>,
+        storyContext: String = ""
     ): Result<Map<Int, String>> = withContext(Dispatchers.IO) {
         if (bubbles.isEmpty()) return@withContext Result.success(emptyMap())
         try {
@@ -141,18 +143,25 @@ class GeminiClient {
                 }
             }
 
+            val contextSection = if (storyContext.isNotBlank()) {
+                "\nStory / Previous Page Context for continuity:\n$storyContext\n"
+            } else ""
+
             val prompt = """
-                You are an expert manga/comic translator.
-                Translate the following Japanese speech bubbles into natural English dialog.
-                Return ONLY valid JSON in format:
-                {"items":[{"id":1,"translated":"..."}]}
-                Input bubbles:
+                You are a master manga localizer and comic translator.
+                Translate the following Japanese manga dialogue into natural, punchy, conversational English.
+                $contextSection
+                Input bubbles (ordered in Japanese reading order: Top-to-Bottom, Right-to-Left):
                 $inputList
-                Rules:
-                - Keep character names consistent.
-                - Do not merge bubbles.
-                - Provide ONLY natural English translation per id.
-                - No translator notes, no romanization, no explanations.
+                
+                Localization & Translation Guidelines:
+                - Holistic Translation: Read the entire conversation on this page as a single cohesive scene.
+                - Pronoun & Subject Resolution: Japanese frequently omits subjects (e.g. 私, 俺, 貴方, 彼, 彼女). Infer and supply the correct English pronouns and subjects based on speaker context, relationship, and conversational flow.
+                - Character Voice & Tone: Preserve unique character personalities, slang, emotional weight, comedic timing, and shouting intensity.
+                - Exclamations & SFX: Translate sound effects or shouts naturally (e.g. "うますぎ警報 発令―――！！" -> "DELICIOUSNESS WARNING ISSUED---!!").
+                - Lettering-Friendly: Provide concise, idiomatic comic dialogue that fits standard speech bubbles.
+                - Output format: Return ONLY valid JSON in format:
+                {"items":[{"id":1,"translated":"..."}]}
             """.trimIndent()
 
             val requestJson = JSONObject().apply {

@@ -35,35 +35,42 @@ class BubbleParsingTest {
     fun testMangaReadingOrderSorting() {
         // Traditional manga order: Right-to-Left, Top-to-Bottom
         val bubbleTopRight = Bubble(
-            id = 1,
+            id = 99,
             box = listOf(0.7f, 0.1f, 0.9f, 0.3f), // x1=0.7, y1=0.1 (top right)
             text = "最初",
             translated = "First"
         )
         val bubbleTopLeft = Bubble(
-            id = 2,
+            id = 88,
             box = listOf(0.1f, 0.1f, 0.3f, 0.3f), // x1=0.1, y1=0.1 (top left)
             text = "二番目",
             translated = "Second"
         )
         val bubbleBottomRight = Bubble(
-            id = 3,
+            id = 77,
             box = listOf(0.7f, 0.6f, 0.9f, 0.8f), // x1=0.7, y1=0.6 (bottom right)
             text = "三番目",
             translated = "Third"
         )
-
-        val unsortedList = listOf(bubbleBottomRight, bubbleTopLeft, bubbleTopRight)
-
-        // Comparator: Sort primarily by vertical panel row, then right-to-left
-        val sortedList = unsortedList.sortedWith(
-            compareBy<Bubble> { (it.y1 * 5).toInt() } // panel grouping
-                .thenByDescending { it.x1 } // right to left
+        val bubbleBottomLeft = Bubble(
+            id = 66,
+            box = listOf(0.1f, 0.6f, 0.3f, 0.8f), // x1=0.1, y1=0.6 (bottom left)
+            text = "四番目",
+            translated = "Fourth"
         )
 
+        val unsortedList = listOf(bubbleBottomLeft, bubbleTopLeft, bubbleBottomRight, bubbleTopRight)
+        val sortedList = Bubble.sortByMangaReadingOrder(unsortedList)
+
+        assertEquals(4, sortedList.size)
+        assertEquals("最初", sortedList[0].text) // Top right
         assertEquals(1, sortedList[0].id)
+        assertEquals("二番目", sortedList[1].text) // Top left
         assertEquals(2, sortedList[1].id)
+        assertEquals("三番目", sortedList[2].text) // Bottom right
         assertEquals(3, sortedList[2].id)
+        assertEquals("四番目", sortedList[3].text) // Bottom left
+        assertEquals(4, sortedList[3].id)
     }
 
     @Test

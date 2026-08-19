@@ -171,5 +171,30 @@ data class Bubble(
             bubbles.forEach { array.put(it.toJson()) }
             return array.toString()
         }
+
+        /**
+         * Sorts bubbles in authentic Japanese Manga reading order:
+         * 1. Top-to-bottom tiers (panels).
+         * 2. Right-to-left within each vertical tier.
+         * 3. Renumbers IDs sequentially (1..N).
+         */
+        fun sortByMangaReadingOrder(bubbles: List<Bubble>): List<Bubble> {
+            if (bubbles.size <= 1) return bubbles
+
+            return bubbles.sortedWith(
+                Comparator { b1, b2 ->
+                    val yDiff = kotlin.math.abs(b1.y1 - b2.y1)
+                    if (yDiff < 0.12f) {
+                        // Same vertical panel band: Right-to-Left takes precedence
+                        b2.x2.compareTo(b1.x2)
+                    } else {
+                        // Different vertical tier: Top-to-Bottom takes precedence
+                        b1.y1.compareTo(b2.y1)
+                    }
+                }
+            ).mapIndexed { index, bubble ->
+                bubble.copy(id = index + 1)
+            }
+        }
     }
 }

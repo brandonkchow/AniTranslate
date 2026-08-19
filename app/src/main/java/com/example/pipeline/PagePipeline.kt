@@ -167,12 +167,32 @@ class PagePipeline(
             RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "TRANSLATE_START", "Translating ${bubbles.size} bubbles with ${slot.displayTitle}")
             onStatusUpdate(currentPage)
 
+            // Sort bubbles in Manga reading order for coherent scene flow
+            bubbles = Bubble.sortByMangaReadingOrder(bubbles)
+
+            // Extract context from preceding page in the same job for narrative continuity
+            val storyContext = buildString {
+                try {
+                    val prevPages = com.example.data.db.AppDatabase.getInstance(context).jobDao().getPagesForJobDirect(currentPage.jobId)
+                    val prevPage = prevPages.find { it.pageIndex == currentPage.pageIndex - 1 }
+                    if (prevPage != null) {
+                        val prevBubbles = prevPage.getBubbles().filter { it.translated.isNotBlank() }
+                        if (prevBubbles.isNotEmpty()) {
+                            appendLine("Previous page (${prevPage.pageIndex + 1}) dialogue:")
+                            prevBubbles.takeLast(4).forEach { pb ->
+                                appendLine("- \"${pb.translated}\" (Japanese: \"${pb.text.replace("\n", " ")}\")")
+                            }
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+
             val startTimeMs = System.currentTimeMillis()
             val transResult = keyRouter.executeWithSlot(PipelineStage.TRANSLATE, slot) { s ->
                 when (s.provider) {
-                    ApiProvider.GEMINI -> geminiClient.translateBubbles(s.baseUrl, s.apiKey, s.model, bubbles)
+                    ApiProvider.GEMINI -> geminiClient.translateBubbles(s.baseUrl, s.apiKey, s.model, bubbles, storyContext = storyContext)
                     ApiProvider.GROQ, ApiProvider.OPENROUTER, ApiProvider.CUSTOM ->
-                        openAiClient.translateBubbles(s.baseUrl, s.apiKey, s.model, bubbles, provider = s.provider)
+                        openAiClient.translateBubbles(s.baseUrl, s.apiKey, s.model, bubbles, provider = s.provider, storyContext = storyContext)
                 }
             }
             val elapsedMs = System.currentTimeMillis() - startTimeMs

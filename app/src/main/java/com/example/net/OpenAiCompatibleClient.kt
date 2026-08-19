@@ -134,8 +134,9 @@ class OpenAiCompatibleClient {
             }
 
             val content = extractChatResponseContent(body)
-            val bubbles = parseBubblesJson(content)
-            Result.success(bubbles)
+            val rawBubbles = parseBubblesJson(content)
+            val sortedBubbles = Bubble.sortByMangaReadingOrder(rawBubbles)
+            Result.success(sortedBubbles)
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -146,7 +147,8 @@ class OpenAiCompatibleClient {
         apiKey: String,
         model: String,
         bubbles: List<Bubble>,
-        provider: ApiProvider
+        provider: ApiProvider,
+        storyContext: String = ""
     ): Result<Map<Int, String>> = withContext(Dispatchers.IO) {
         if (bubbles.isEmpty()) return@withContext Result.success(emptyMap())
         try {
@@ -162,16 +164,21 @@ class OpenAiCompatibleClient {
                 }
             }
 
+            val contextSection = if (storyContext.isNotBlank()) {
+                "\nStory / Previous Page Context for continuity:\n$storyContext\n"
+            } else ""
+
             val systemPrompt = """
-                You are an expert manga/comic translator.
-                Translate the Japanese speech bubbles into natural English.
-                Return ONLY valid JSON in format:
-                {"items":[{"id":1,"translated":"..."}]}
+                You are a master manga localizer and comic translator.
+                Translate the following Japanese manga dialogue into natural, punchy, conversational English.
+                $contextSection
                 Rules:
-                - Keep names consistent.
-                - Do not merge bubbles.
-                - Natural English dialog only.
-                - No notes, explanations, or romanization.
+                - Holistic Translation: Translate all bubbles in the sequence as a single scene.
+                - Pronoun & Subject Resolution: Resolve omitted Japanese subjects (e.g. 私, 俺, 貴方, 彼, 彼女) and implicit pronouns based on context and conversational flow.
+                - Character Voice & Tone: Preserve unique character personalities, comedic timing, emotional cadence, and shouting intensity.
+                - Keep dialogue punchy and lettering-friendly.
+                - Return ONLY valid JSON in format:
+                {"items":[{"id":1,"translated":"..."}]}
             """.trimIndent()
 
             val requestJson = JSONObject().apply {
