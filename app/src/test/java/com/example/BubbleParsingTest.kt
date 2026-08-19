@@ -129,4 +129,29 @@ class BubbleParsingTest {
         assertEquals(0.5f, bubble3.x2, 0.001f)
         assertEquals(0.6f, bubble3.y2, 0.001f)
     }
+
+    @Test
+    fun testFreeTextAndNarrationTypes() {
+        val json = org.json.JSONObject("""
+            {
+                "id": 1,
+                "text": "ゴゴゴゴ (轟音)",
+                "box_2d": [400, 150, 600, 450],
+                "type": "floating",
+                "vertical": true
+            }
+        """.trimIndent())
+
+        val bubble = Bubble.fromJson(json)
+        assertEquals(1, bubble.id)
+        assertEquals("floating", bubble.type)
+        assertEquals(0.15f, bubble.x1, 0.001f)
+        assertEquals(0.40f, bubble.y1, 0.001f)
+        assertEquals(0.45f, bubble.x2, 0.001f)
+        assertEquals(0.60f, bubble.y2, 0.001f)
+
+        val jsonStr = bubble.toJson().toString()
+        val parsedBack = Bubble.fromJson(org.json.JSONObject(jsonStr))
+        assertEquals("floating", parsedBack.type)
+    }
 }

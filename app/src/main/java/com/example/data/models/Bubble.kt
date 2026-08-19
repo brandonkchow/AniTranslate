@@ -10,7 +10,8 @@ data class Bubble(
     val vertical: Boolean = true,
     var translated: String = "",
     var fontSizeSp: Float = 14f,
-    var visible: Boolean = true
+    var visible: Boolean = true,
+    val type: String = "bubble" // "bubble", "narration", "floating", "side_text"
 ) {
     val x1: Float get() = box.getOrNull(0)?.coerceIn(0f, 1f) ?: 0f
     val y1: Float get() = box.getOrNull(1)?.coerceIn(0f, 1f) ?: 0f
@@ -31,6 +32,7 @@ data class Bubble(
             put("translated", translated)
             put("fontSizeSp", fontSizeSp.toDouble())
             put("visible", visible)
+            put("type", type)
         }
     }
 
@@ -71,6 +73,12 @@ data class Bubble(
 
             val fontSizeSp = json.optDouble("fontSizeSp", 14.0).toFloat()
             val visible = json.optBoolean("visible", true)
+            val type = when {
+                json.has("type") -> json.optString("type", "bubble")
+                json.has("kind") -> json.optString("kind", "bubble")
+                json.has("category") -> json.optString("category", "bubble")
+                else -> "bubble"
+            }
 
             return Bubble(
                 id = id,
@@ -79,7 +87,8 @@ data class Bubble(
                 vertical = vertical,
                 translated = translated,
                 fontSizeSp = fontSizeSp,
-                visible = visible
+                visible = visible,
+                type = type
             )
         }
 

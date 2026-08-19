@@ -127,13 +127,65 @@ class PagePipeline(
             }
 
             bubbles = detectResult.getOrNull().orEmpty()
+            
+            // 2b. Fallback Strategy: If 0 text regions found in Pass 1, trigger Pass 2 "Scan-All-Text" OCR Mode
             if (bubbles.isEmpty()) {
-                RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "DETECT_DONE", "0 bubbles detected (${elapsedMs}ms). Page treated as non-dialogue.")
+                RunLogger.logPageEvent(
+                    context,
+                    currentPage.jobId,
+                    currentPage.pageIndex,
+                    "DETECT_FALLBACK",
+                    "0 bubbles detected in Pass 1 (${elapsedMs}ms). Triggering Pass 2 'Scan-All-Text' OCR Fallback..."
+                )
+
+                val fallbackStartTimeMs = System.currentTimeMillis()
+                val fallbackResult = keyRouter.executeWithSlot(PipelineStage.DETECT_OCR, slot) { s ->
+                    when (s.provider) {
+                        ApiProvider.GEMINI -> geminiClient.scanAllText(s.baseUrl, s.apiKey, s.model, base64)
+                        ApiProvider.OPENROUTER, ApiProvider.CUSTOM -> openAiClient.scanAllText(s.baseUrl, s.apiKey, s.model, base64, provider = s.provider)
+                        ApiProvider.GROQ -> Result.failure(IllegalArgumentException("Groq does not support image detection."))
+                    }
+                }
+                val fallbackElapsedMs = System.currentTimeMillis() - fallbackStartTimeMs
+
+                if (fallbackResult.isSuccess) {
+                    val fallbackBubbles = fallbackResult.getOrNull().orEmpty()
+                    if (fallbackBubbles.isNotEmpty()) {
+                        bubbles = fallbackBubbles
+                        RunLogger.logPageEvent(
+                            context,
+                            currentPage.jobId,
+                            currentPage.pageIndex,
+                            "DETECT_RECOVERED",
+                            "Scan-All-Text Fallback recovered ${bubbles.size} Japanese text regions (${fallbackElapsedMs}ms):"
+                        )
+                        bubbles.forEach { b ->
+                            val boxStr = "[${String.format(java.util.Locale.US, "%.3f,%.3f,%.3f,%.3f", b.x1, b.y1, b.x2, b.y2)}]"
+                            RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "DETECT_ITEM", "  #${b.id} $boxStr (type=${b.type}, vert=${b.vertical}): \"${b.text.replace("\n", " ")}\"")
+                        }
+                    } else {
+                        RunLogger.logPageEvent(
+                            context,
+                            currentPage.jobId,
+                            currentPage.pageIndex,
+                            "DETECT_DONE",
+                            "0 text regions detected after 2-pass scan (${elapsedMs + fallbackElapsedMs}ms). Page treated as silent/non-dialogue."
+                        )
+                    }
+                } else {
+                    RunLogger.logPageEvent(
+                        context,
+                        currentPage.jobId,
+                        currentPage.pageIndex,
+                        "DETECT_DONE",
+                        "Fallback scan completed with 0 detections. Page treated as silent/non-dialogue."
+                    )
+                }
             } else {
-                RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "DETECT_DONE", "Detected ${bubbles.size} bubbles in ${elapsedMs}ms:")
+                RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "DETECT_DONE", "Detected ${bubbles.size} text regions in ${elapsedMs}ms:")
                 bubbles.forEach { b ->
                     val boxStr = "[${String.format(java.util.Locale.US, "%.3f,%.3f,%.3f,%.3f", b.x1, b.y1, b.x2, b.y2)}]"
-                    RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "DETECT_ITEM", "  #${b.id} $boxStr (vert=${b.vertical}): \"${b.text.replace("\n", " ")}\"")
+                    RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "DETECT_ITEM", "  #${b.id} $boxStr (type=${b.type}, vert=${b.vertical}): \"${b.text.replace("\n", " ")}\"")
                 }
             }
             currentPage = currentPage.copy(

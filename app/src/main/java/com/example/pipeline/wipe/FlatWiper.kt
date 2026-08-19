@@ -41,25 +41,51 @@ object FlatWiper {
             val sampledColor = sampleBubbleInteriorColor(sourceBitmap, leftPx, topPx, rightPx, bottomPx)
             paint.color = sampledColor
 
-            // Inset slightly so we do not overwrite the outer contour lines of the comic speech bubble
-            val rectF = RectF(
-                leftPx + contourSafetyMargin,
-                topPx + contourSafetyMargin,
-                rightPx - contourSafetyMargin,
-                bottomPx - contourSafetyMargin
-            )
+            when (bubble.type.lowercase()) {
+                "narration" -> {
+                    // Rectangular narration box with minimal inset
+                    val rectF = RectF(
+                        leftPx + contourSafetyMargin,
+                        topPx + contourSafetyMargin,
+                        rightPx - contourSafetyMargin,
+                        bottomPx - contourSafetyMargin
+                    )
+                    val cornerRadius = 3f * densityScale
+                    canvas.drawRoundRect(rectF, cornerRadius, cornerRadius, paint)
+                }
+                "floating", "side_text" -> {
+                    // Floating text directly over artwork: Clean tight text region with subtle corner radius
+                    val rectF = RectF(
+                        leftPx.toFloat(),
+                        topPx.toFloat(),
+                        rightPx.toFloat(),
+                        bottomPx.toFloat()
+                    )
+                    val cornerRadius = 6f * densityScale
+                    canvas.drawRoundRect(rectF, cornerRadius, cornerRadius, paint)
+                }
+                else -> {
+                    // Standard Speech / Thought Bubble: Inset contour-safe oval or rounded rect
+                    val rectF = RectF(
+                        leftPx + contourSafetyMargin,
+                        topPx + contourSafetyMargin,
+                        rightPx - contourSafetyMargin,
+                        bottomPx - contourSafetyMargin
+                    )
 
-            val width = rectF.width()
-            val height = rectF.height()
-            val aspect = width / height
+                    val width = rectF.width()
+                    val height = rectF.height()
+                    val aspect = width / height
 
-            if (aspect in 0.65f..1.55f) {
-                // Circular/oval speech bubble
-                canvas.drawOval(rectF, paint)
-            } else {
-                // Rounded rect for elongated or rectangular panels
-                val cornerRadius = min(width, height) * 0.25f
-                canvas.drawRoundRect(rectF, cornerRadius, cornerRadius, paint)
+                    if (aspect in 0.65f..1.55f) {
+                        // Circular/oval speech bubble
+                        canvas.drawOval(rectF, paint)
+                    } else {
+                        // Rounded rect for elongated or rectangular panels
+                        val cornerRadius = min(width, height) * 0.25f
+                        canvas.drawRoundRect(rectF, cornerRadius, cornerRadius, paint)
+                    }
+                }
             }
         }
 
