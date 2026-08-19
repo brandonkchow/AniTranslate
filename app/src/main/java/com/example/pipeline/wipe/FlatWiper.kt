@@ -13,7 +13,7 @@ import kotlin.math.min
 
 object FlatWiper {
 
-    private const val FALLBACK_COLOR = 0xFFFFF8EE.toInt() // Warm manga paper tint (#FFF8EE)
+    private const val FALLBACK_COLOR = 0xFFFFFFFF.toInt() // Clean white fallback
 
     suspend fun wipeBubbles(
         sourceBitmap: Bitmap,
@@ -27,6 +27,8 @@ object FlatWiper {
 
         val bmpWidth = sourceBitmap.width
         val bmpHeight = sourceBitmap.height
+        val densityScale = max(1.0f, max(bmpWidth, bmpHeight) / 1000f)
+        val contourSafetyMargin = (2f * densityScale).coerceIn(1f, 5f)
 
         for (bubble in bubbles) {
             if (!bubble.visible) continue
@@ -36,30 +38,40 @@ object FlatWiper {
             val rightPx = (bubble.x2 * bmpWidth).toInt().coerceIn(leftPx + 1, bmpWidth)
             val bottomPx = (bubble.y2 * bmpHeight).toInt().coerceIn(topPx + 1, bmpHeight)
 
-            val sampledColor = sampleOuterRingMedianColor(sourceBitmap, leftPx, topPx, rightPx, bottomPx, ringThicknessPx = 4)
+            val sampledColor = sampleBubbleInteriorColor(sourceBitmap, leftPx, topPx, rightPx, bottomPx)
             paint.color = sampledColor
 
+            // Inset slightly so we do not overwrite the outer contour lines of the comic speech bubble
             val rectF = RectF(
-                leftPx.toFloat(),
-                topPx.toFloat(),
-                rightPx.toFloat(),
-                bottomPx.toFloat()
+                leftPx + contourSafetyMargin,
+                topPx + contourSafetyMargin,
+                rightPx - contourSafetyMargin,
+                bottomPx - contourSafetyMargin
             )
-            // Draw smooth rounded rect over bubble
-            val cornerRadius = min(rectF.width(), rectF.height()) * 0.15f
-            canvas.drawRoundRect(rectF, cornerRadius, cornerRadius, paint)
+
+            val width = rectF.width()
+            val height = rectF.height()
+            val aspect = width / height
+
+            if (aspect in 0.65f..1.55f) {
+                // Circular/oval speech bubble
+                canvas.drawOval(rectF, paint)
+            } else {
+                // Rounded rect for elongated or rectangular panels
+                val cornerRadius = min(width, height) * 0.25f
+                canvas.drawRoundRect(rectF, cornerRadius, cornerRadius, paint)
+            }
         }
 
         resultBitmap
     }
 
-    private fun sampleOuterRingMedianColor(
+    private fun sampleBubbleInteriorColor(
         bitmap: Bitmap,
         left: Int,
         top: Int,
         right: Int,
-        bottom: Int,
-        ringThicknessPx: Int = 4
+        bottom: Int
     ): Int {
         val rList = mutableListOf<Int>()
         val gList = mutableListOf<Int>()
@@ -68,47 +80,33 @@ object FlatWiper {
         val bmpW = bitmap.width
         val bmpH = bitmap.height
 
-        // Top ring
-        val topStart = max(0, top - ringThicknessPx)
-        for (y in topStart until top) {
-            for (x in max(0, left - ringThicknessPx) until min(bmpW, right + ringThicknessPx)) {
-                val pixel = bitmap.getPixel(x, y)
-                rList.add(Color.red(pixel))
-                gList.add(Color.green(pixel))
-                bList.add(Color.blue(pixel))
-            }
-        }
+        // Sample pixels inside the bubble near inner boundary, filtering out dark text strokes (luminance < 0.65)
+        val insetX = ((right - left) * 0.12f).toInt().coerceAtLeast(2)
+        val insetY = ((bottom - top) * 0.12f).toInt().coerceAtLeast(2)
 
-        // Bottom ring
-        val bottomEnd = min(bmpH, bottom + ringThicknessPx)
-        for (y in bottom until bottomEnd) {
-            for (x in max(0, left - ringThicknessPx) until min(bmpW, right + ringThicknessPx)) {
-                val pixel = bitmap.getPixel(x, y)
-                rList.add(Color.red(pixel))
-                gList.add(Color.green(pixel))
-                bList.add(Color.blue(pixel))
-            }
-        }
+        val samplePoints = listOf(
+            Pair(left + insetX, top + insetY),
+            Pair(right - insetX, top + insetY),
+            Pair(left + insetX, bottom - insetY),
+            Pair(right - insetX, bottom - insetY),
+            Pair(left + insetX, (top + bottom) / 2),
+            Pair(right - insetX, (top + bottom) / 2)
+        )
 
-        // Left ring
-        val leftStart = max(0, left - ringThicknessPx)
-        for (x in leftStart until left) {
-            for (y in top until bottom) {
-                val pixel = bitmap.getPixel(x, y)
-                rList.add(Color.red(pixel))
-                gList.add(Color.green(pixel))
-                bList.add(Color.blue(pixel))
-            }
-        }
+        for ((x, y) in samplePoints) {
+            val clampedX = x.coerceIn(0, bmpW - 1)
+            val clampedY = y.coerceIn(0, bmpH - 1)
+            val pixel = bitmap.getPixel(clampedX, clampedY)
+            val r = Color.red(pixel)
+            val g = Color.green(pixel)
+            val b = Color.blue(pixel)
+            val luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0
 
-        // Right ring
-        val rightEnd = min(bmpW, right + ringThicknessPx)
-        for (x in right until rightEnd) {
-            for (y in top until bottom) {
-                val pixel = bitmap.getPixel(x, y)
-                rList.add(Color.red(pixel))
-                gList.add(Color.green(pixel))
-                bList.add(Color.blue(pixel))
+            // Only consider bright background pixels
+            if (luminance >= 0.65) {
+                rList.add(r)
+                gList.add(g)
+                bList.add(b)
             }
         }
 
@@ -127,3 +125,4 @@ object FlatWiper {
         return Color.rgb(medianR, medianG, medianB)
     }
 }
+

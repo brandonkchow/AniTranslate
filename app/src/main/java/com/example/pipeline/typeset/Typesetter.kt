@@ -30,7 +30,6 @@ object Typesetter {
         val bmpW = wipedBitmap.width
         val bmpH = wipedBitmap.height
         val densityScale = max(1.0f, max(bmpW, bmpH) / 1000f)
-        val paddingPx = 6f * densityScale
 
         for (bubble in bubbles) {
             if (!bubble.visible) continue
@@ -42,24 +41,37 @@ object Typesetter {
             val rightPx = bubble.x2 * bmpW
             val bottomPx = bubble.y2 * bmpH
 
-            val boxWidth = (rightPx - leftPx).coerceAtLeast(20f)
-            val boxHeight = (bottomPx - topPx).coerceAtLeast(20f)
+            val boxWidth = (rightPx - leftPx).coerceAtLeast(24f)
+            val boxHeight = (bottomPx - topPx).coerceAtLeast(24f)
+            val aspectRatio = boxWidth / boxHeight
 
-            val availableWidth = (boxWidth - (paddingPx * 2)).coerceAtLeast(10f)
-            val availableHeight = (boxHeight - (paddingPx * 2)).coerceAtLeast(10f)
+            // Elliptical safety inset: Speech bubbles are oval, so horizontal padding is wider near corners
+            val horizontalPadding = (boxWidth * (if (aspectRatio < 0.7f) 0.12f else 0.15f)).coerceAtLeast(4f * densityScale)
+            val verticalPadding = (boxHeight * 0.10f).coerceAtLeast(4f * densityScale)
 
-            // Determine optimal text size
+            val availableWidth = (boxWidth - (horizontalPadding * 2)).toInt().coerceAtLeast(16)
+            val availableHeight = (boxHeight - (verticalPadding * 2)).coerceAtLeast(16f)
+
+            // Dynamic maxLines based on aspect ratio
+            val maxLines = when {
+                aspectRatio < 0.6f -> 8
+                aspectRatio < 0.9f -> 6
+                aspectRatio > 1.8f -> 3
+                else -> 4
+            }
+
             val baseSizePx = bubble.fontSizeSp * densityScale
-            val (optimalLayout, optimalPaint) = calculateBestLayout(
+            val (optimalLayout, optimalPaint) = calculateBestLayoutBinarySearch(
                 text = text,
-                availableWidth = availableWidth.toInt(),
+                availableWidth = availableWidth,
                 availableHeight = availableHeight,
-                baseSizePx = baseSizePx,
+                maxSizePx = baseSizePx * 1.25f,
+                minSizePx = (baseSizePx * 0.40f).coerceAtLeast(9f * densityScale),
                 typeface = typeface,
-                maxLines = 4
+                maxLines = maxLines
             )
 
-            // Draw centered
+            // Draw centered within the bubble
             canvas.save()
             val textLayoutHeight = optimalLayout.height.toFloat()
             val textLayoutWidth = optimalLayout.width.toFloat()
@@ -74,24 +86,27 @@ object Typesetter {
         resultBitmap
     }
 
-    private fun calculateBestLayout(
+    private fun calculateBestLayoutBinarySearch(
         text: String,
         availableWidth: Int,
         availableHeight: Float,
-        baseSizePx: Float,
+        maxSizePx: Float,
+        minSizePx: Float,
         typeface: Typeface,
-        maxLines: Int = 4
+        maxLines: Int
     ): Pair<StaticLayout, TextPaint> {
-        var currentSize = baseSizePx
-        val minSize = max(9f, baseSizePx * 0.45f)
-
+        var low = minSizePx
+        var high = maxSizePx
+        var bestSize = minSizePx
         var bestLayout: StaticLayout? = null
         var bestPaint: TextPaint? = null
 
-        while (currentSize >= minSize) {
+        // Binary search for optimal text size with 0.5px precision
+        for (i in 0 until 8) {
+            val mid = (low + high) / 2f
             val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = Color.BLACK
-                textSize = currentSize
+                textSize = mid
                 this.typeface = typeface
                 textAlign = Paint.Align.LEFT
             }
@@ -99,30 +114,38 @@ object Typesetter {
             val layout = StaticLayout.Builder
                 .obtain(text, 0, text.length, textPaint, availableWidth)
                 .setAlignment(Layout.Alignment.ALIGN_CENTER)
-                .setLineSpacing(0f, 0.95f)
+                .setLineSpacing(0f, 0.92f)
                 .setIncludePad(false)
                 .setMaxLines(maxLines)
                 .build()
 
-            bestLayout = layout
-            bestPaint = textPaint
-
             if (layout.height <= availableHeight && layout.lineCount <= maxLines) {
-                break
+                bestSize = mid
+                bestLayout = layout
+                bestPaint = textPaint
+                low = mid + 0.5f // Try larger font
+            } else {
+                high = mid - 0.5f // Try smaller font
             }
-            currentSize -= 1.5f
         }
 
-        return Pair(
-            bestLayout ?: StaticLayout.Builder
-                .obtain(text, 0, text.length, TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-                    color = Color.BLACK
-                    textSize = minSize
-                    this.typeface = typeface
-                }, availableWidth)
+        if (bestLayout == null) {
+            val fallbackPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.BLACK
+                textSize = minSizePx
+                this.typeface = typeface
+            }
+            bestLayout = StaticLayout.Builder
+                .obtain(text, 0, text.length, fallbackPaint, availableWidth)
                 .setAlignment(Layout.Alignment.ALIGN_CENTER)
-                .build(),
-            bestPaint ?: TextPaint()
-        )
+                .setLineSpacing(0f, 0.90f)
+                .setIncludePad(false)
+                .setMaxLines(maxLines)
+                .build()
+            bestPaint = fallbackPaint
+        }
+
+        return Pair(bestLayout, bestPaint ?: TextPaint())
     }
 }
+
