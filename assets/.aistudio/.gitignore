@@ -1,1 +1,6 @@
-*
+# Allow sample files
+!*.jpg
+!*.png
+!*.jpeg
+!*.webp
+
