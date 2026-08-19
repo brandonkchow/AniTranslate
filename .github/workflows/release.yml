@@ -33,10 +33,26 @@ jobs:
           if [ ! -f ".env" ]; then
             touch .env
           fi
+          if [ ! -f ".env.example" ]; then
+            touch .env.example
+          fi
 
-      - name: Setup Keystore & Environment Secrets (Optional)
+      - name: Prepare Debug & Release Keystores
         id: setup-keystore
         run: |
+          # Ensure root debug.keystore exists for debugConfig in build.gradle.kts
+          if [ -f "debug.keystore.base64" ]; then
+            base64 -d debug.keystore.base64 > "${GITHUB_WORKSPACE}/debug.keystore"
+            echo "Decoded debug.keystore from debug.keystore.base64"
+          elif [ ! -f "debug.keystore" ]; then
+            keytool -genkey -v -keystore "${GITHUB_WORKSPACE}/debug.keystore" \
+              -storepass android -alias androiddebugkey -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+            echo "Generated fallback debug.keystore"
+          fi
+
+          # Setup custom release keystore if secrets are configured
           if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
             echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > "${GITHUB_WORKSPACE}/my-upload-key.jks"
             echo "KEYSTORE_PATH=${GITHUB_WORKSPACE}/my-upload-key.jks" >> $GITHUB_ENV

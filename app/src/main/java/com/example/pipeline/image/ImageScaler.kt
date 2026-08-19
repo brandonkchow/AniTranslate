@@ -3,10 +3,8 @@ package com.example.pipeline.image
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.ImageDecoder
 import android.graphics.Matrix
 import android.net.Uri
-import android.os.Build
 import android.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -19,21 +17,12 @@ object ImageScaler {
 
     suspend fun loadAndCacheOriginal(context: Context, uri: Uri, targetFile: File): Bitmap? = withContext(Dispatchers.IO) {
         try {
-            val bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                val source = ImageDecoder.createSource(context.contentResolver, uri)
-                ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
-                    decoder.allocator = ImageDecoder.ALLOCATOR_DEFAULT
-                    decoder.isMutableRequired = true
-                }
-            } else {
-                val inputStream = context.contentResolver.openInputStream(uri) ?: return@withContext null
+            val bitmap = context.contentResolver.openInputStream(uri)?.use { inputStream ->
                 val options = BitmapFactory.Options().apply {
                     inPreferredConfig = Bitmap.Config.ARGB_8888
                     inMutable = true
                 }
-                val bmp = BitmapFactory.decodeStream(inputStream, null, options)
-                inputStream.close()
-                bmp
+                BitmapFactory.decodeStream(inputStream, null, options)
             }
 
             if (bitmap != null) {
@@ -94,19 +83,11 @@ object ImageScaler {
     suspend fun loadBitmapFromFile(file: File): Bitmap? = withContext(Dispatchers.IO) {
         if (!file.exists()) return@withContext null
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                val source = ImageDecoder.createSource(file)
-                ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
-                    decoder.allocator = ImageDecoder.ALLOCATOR_DEFAULT
-                    decoder.isMutableRequired = true
-                }
-            } else {
-                val options = BitmapFactory.Options().apply {
-                    inPreferredConfig = Bitmap.Config.ARGB_8888
-                    inMutable = true
-                }
-                BitmapFactory.decodeFile(file.absolutePath, options)
+            val options = BitmapFactory.Options().apply {
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+                inMutable = true
             }
+            BitmapFactory.decodeFile(file.absolutePath, options)
         } catch (e: Exception) {
             null
         }
