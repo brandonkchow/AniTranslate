@@ -77,10 +77,10 @@ class GeminiClient {
                         val parts = JSONArray().apply {
                             // Text prompt
                             put(JSONObject().apply { put("text", prompt) })
-                            // Image part
+                            // Image part using standard Gemini REST inlineData field
                             put(JSONObject().apply {
-                                put("inline_data", JSONObject().apply {
-                                    put("mime_type", mimeType)
+                                put("inlineData", JSONObject().apply {
+                                    put("mimeType", mimeType)
                                     put("data", imageBase64)
                                 })
                             })
@@ -296,13 +296,10 @@ class GeminiClient {
 
     private fun cleanJson(raw: String): String {
         var str = raw.trim()
-        if (str.startsWith("```json")) {
-            str = str.removePrefix("```json").trim()
-        } else if (str.startsWith("```")) {
-            str = str.removePrefix("```").trim()
-        }
-        if (str.endsWith("```")) {
-            str = str.removeSuffix("```").trim()
+        val markdownRegex = Regex("""```(?:json)?\s*([\s\S]*?)\s*```""", RegexOption.IGNORE_CASE)
+        val match = markdownRegex.find(str)
+        if (match != null) {
+            str = match.groupValues[1].trim()
         }
         val firstObj = str.indexOf('{')
         val lastObj = str.lastIndexOf('}')
