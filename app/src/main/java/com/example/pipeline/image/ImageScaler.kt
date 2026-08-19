@@ -22,7 +22,7 @@ object ImageScaler {
             val bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 val source = ImageDecoder.createSource(context.contentResolver, uri)
                 ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
-                    decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                    decoder.allocator = ImageDecoder.ALLOCATOR_DEFAULT
                     decoder.isMutableRequired = true
                 }
             } else {
@@ -97,7 +97,7 @@ object ImageScaler {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 val source = ImageDecoder.createSource(file)
                 ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
-                    decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                    decoder.allocator = ImageDecoder.ALLOCATOR_DEFAULT
                     decoder.isMutableRequired = true
                 }
             } else {
