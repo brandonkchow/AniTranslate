@@ -154,4 +154,26 @@ class BubbleParsingTest {
         val parsedBack = Bubble.fromJson(org.json.JSONObject(jsonStr))
         assertEquals("floating", parsedBack.type)
     }
+
+    @Test
+    fun testRetryDelayExtractionFromGeminiErrorMessage() {
+        val errorMsgSec = """
+            You exceeded your current quota, please check your plan and billing details.
+            * Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash
+            Please retry in 18.302319871s. (411ms)
+        """.trimIndent()
+
+        val regexSec = Regex("""retry in ([0-9]+(?:\.[0-9]+)?)\s*s""", RegexOption.IGNORE_CASE)
+        val matchSec = regexSec.find(errorMsgSec)
+        assertTrue(matchSec != null)
+        val secs = matchSec!!.groupValues[1].toDouble()
+        assertEquals(18.302319871, secs, 0.001)
+
+        val errorMsgMs = "Resource exhausted. Please retry in 361.532506ms."
+        val regexMs = Regex("""retry in ([0-9]+(?:\.[0-9]+)?)\s*ms""", RegexOption.IGNORE_CASE)
+        val matchMs = regexMs.find(errorMsgMs)
+        assertTrue(matchMs != null)
+        val ms = matchMs!!.groupValues[1].toDouble()
+        assertEquals(361.532506, ms, 0.001)
+    }
 }

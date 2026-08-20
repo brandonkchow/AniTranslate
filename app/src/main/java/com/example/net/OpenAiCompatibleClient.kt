@@ -36,7 +36,7 @@ class OpenAiCompatibleClient {
                 Result.success("Key valid (HTTP $code)")
             } else {
                 val errorMsg = extractErrorMessage(body, code)
-                Result.failure(ApiException(code, errorMsg, extractRetryAfter(response.header("Retry-After"))))
+                Result.failure(ApiException(code, errorMsg, extractRetryAfter(response.header("Retry-After"), body)))
             }
         } catch (e: Exception) {
             Result.failure(e)
@@ -142,7 +142,7 @@ class OpenAiCompatibleClient {
 
             if (!response.isSuccessful) {
                 val errorMsg = extractErrorMessage(body, code)
-                return@withContext Result.failure(ApiException(code, errorMsg, extractRetryAfter(response.header("Retry-After"))))
+                return@withContext Result.failure(ApiException(code, errorMsg, extractRetryAfter(response.header("Retry-After"), body)))
             }
 
             val content = extractChatResponseContent(body)
@@ -252,7 +252,7 @@ class OpenAiCompatibleClient {
 
             if (!response.isSuccessful) {
                 val errorMsg = extractErrorMessage(body, code)
-                return@withContext Result.failure(ApiException(code, errorMsg, extractRetryAfter(response.header("Retry-After"))))
+                return@withContext Result.failure(ApiException(code, errorMsg, extractRetryAfter(response.header("Retry-After"), body)))
             }
 
             val content = extractChatResponseContent(body)
@@ -339,7 +339,7 @@ class OpenAiCompatibleClient {
 
             if (!response.isSuccessful) {
                 val errorMsg = extractErrorMessage(body, code)
-                return@withContext Result.failure(ApiException(code, errorMsg, extractRetryAfter(response.header("Retry-After"))))
+                return@withContext Result.failure(ApiException(code, errorMsg, extractRetryAfter(response.header("Retry-After"), body)))
             }
 
             val content = extractChatResponseContent(body)
@@ -473,12 +473,28 @@ class OpenAiCompatibleClient {
         }
     }
 
-    private fun extractRetryAfter(header: String?): Long? {
-        if (header == null) return null
-        return try {
-            header.toLongOrNull()?.times(1000)
-        } catch (e: Exception) {
-            null
+    private fun extractRetryAfter(header: String?, body: String? = null): Long? {
+        if (!header.isNullOrBlank()) {
+            val headerSecs = header.trim().toDoubleOrNull()
+            if (headerSecs != null) {
+                return (headerSecs * 1000).toLong().coerceAtLeast(1000L)
+            }
         }
+        if (!body.isNullOrBlank()) {
+            val regexSec = Regex("""retry in ([0-9]+(?:\.[0-9]+)?)\s*s""", RegexOption.IGNORE_CASE)
+            val matchSec = regexSec.find(body)
+            if (matchSec != null) {
+                val secs = matchSec.groupValues[1].toDoubleOrNull()
+                if (secs != null) return ((secs + 1.5) * 1000).toLong()
+            }
+
+            val regexMs = Regex("""retry in ([0-9]+(?:\.[0-9]+)?)\s*ms""", RegexOption.IGNORE_CASE)
+            val matchMs = regexMs.find(body)
+            if (matchMs != null) {
+                val ms = matchMs.groupValues[1].toDoubleOrNull()
+                if (ms != null) return (ms + 1000).toLong()
+            }
+        }
+        return null
     }
 }

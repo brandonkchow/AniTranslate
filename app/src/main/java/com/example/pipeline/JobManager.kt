@@ -94,11 +94,17 @@ class JobManager(
                     (p.status == PageStatus.WAITING && (p.waitingUntilEpochMs <= now || p.waitingUntilEpochMs == 0L))
                 }
 
-                // Check if any pages are currently parked/waiting
+                // Check slot availability for pending work
+                val (visionSlot, visionWaitTime) = keyRouter.getAvailableSlot(com.example.pipeline.router.PipelineStage.DETECT_OCR)
+                val (translateSlot, translateWaitTime) = keyRouter.getAvailableSlot(com.example.pipeline.router.PipelineStage.TRANSLATE)
+
+                // Check if any pages or slots are currently cooling down / waiting
                 val waitingPages = pages.filter { it.status == PageStatus.WAITING && it.waitingUntilEpochMs > now }
-                if (waitingPages.isNotEmpty()) {
-                    val earliest = waitingPages.minByOrNull { it.waitingUntilEpochMs }
-                    val remainingSec = earliest?.remainingWaitSeconds(now) ?: 0L
+                val earliestWaitTime = waitingPages.minOfOrNull { it.waitingUntilEpochMs }
+                    ?: listOfNotNull(visionWaitTime, translateWaitTime).filter { it > now }.minOrNull()
+
+                if (earliestWaitTime != null && earliestWaitTime > now) {
+                    val remainingSec = kotlin.math.max(1L, (earliestWaitTime - now + 999L) / 1000L)
                     val slots = slotStorage.slots.value
                     val coolingSlot = slots.find { it.isCoolingDown(now) }
                     val nextSlot = slots.find { !it.isCoolingDown(now) && it.enabled && it.apiKey.isNotBlank() }
@@ -106,9 +112,9 @@ class JobManager(
                     val msg = if (coolingSlot != null && nextSlot != null) {
                         "Waiting ${remainingSec}s — ${coolingSlot.displayTitle} rate limited. Next: ${nextSlot.displayTitle}."
                     } else if (coolingSlot != null) {
-                        "Waiting ${remainingSec}s — ${coolingSlot.displayTitle} cooling down."
+                        "Waiting ${remainingSec}s — ${coolingSlot.displayTitle} cooling down. Resuming automatically..."
                     } else {
-                        "Waiting ${remainingSec}s for available API slot."
+                        "Waiting ${remainingSec}s for available API slot..."
                     }
                     _waitingBannerText.value = msg
                 } else {
@@ -127,14 +133,27 @@ class JobManager(
                     break
                 }
 
-                // Run up to 2 concurrent page jobs (or 1 if rate-limit alert is active)
+                // Run up to 2 concurrent page jobs (or 1 if rate-limit alert/cooldown is active)
                 val geminiStatus = ApiUsageTracker.geminiMetrics.value.status
-                val maxConcurrent = if (geminiStatus == ApiHealthStatus.APPROACHING_LIMIT) 1 else 2
+                val maxConcurrent = if (geminiStatus == ApiHealthStatus.APPROACHING_LIMIT || geminiStatus == ApiHealthStatus.COOLDOWN_ACTIVE) 1 else 2
                 val currentlyRunning = activePageJobs.size
                 val availableSlots = maxConcurrent - currentlyRunning
 
-                if (availableSlots > 0 && pendingPages.isNotEmpty()) {
-                    val toLaunch = pendingPages.take(availableSlots)
+                // Filter only pages whose required stage currently has a ready slot (or CPU-only stage)
+                val readyPages = pendingPages.filter { page ->
+                    val needsDetect = page.status == PageStatus.QUEUED || (page.status == PageStatus.WAITING && page.bubblesJson.isBlank())
+                    val needsTranslate = page.status == PageStatus.TRANSLATING || (page.status == PageStatus.WAITING && page.bubblesJson.isNotBlank() && page.wipedImagePath.isBlank())
+                    if (needsDetect && visionSlot == null) {
+                        false
+                    } else if (needsTranslate && translateSlot == null) {
+                        false
+                    } else {
+                        true
+                    }
+                }
+
+                if (availableSlots > 0 && readyPages.isNotEmpty()) {
+                    val toLaunch = readyPages.take(availableSlots)
                     for (page in toLaunch) {
                         if (activePageJobs.containsKey(page.id)) continue
                         val job = launch {
@@ -152,7 +171,7 @@ class JobManager(
                         }
                         activePageJobs[page.id] = job
                         // Inter-page dispatch pacing if auto-throttle is on
-                        if (ApiUsageTracker.autoThrottleEnabled.value && pendingPages.size > 1) {
+                        if (ApiUsageTracker.autoThrottleEnabled.value && readyPages.size > 1) {
                             delay(ApiUsageTracker.throttleDelayMs.value)
                         }
                     }

@@ -115,13 +115,13 @@ class PagePipeline(
 
             if (detectResult.isFailure) {
                 val exception = detectResult.exceptionOrNull()
-                val isRateLimit = (exception is ApiException && exception.isRateLimited)
+                val errorInfo = classifyException(exception)
                 currentPage = currentPage.copy(
-                    status = if (isRateLimit) PageStatus.WAITING else PageStatus.FAILED,
-                    waitingUntilEpochMs = if (isRateLimit) System.currentTimeMillis() + 15000L else 0L,
-                    errorMessage = exception?.message ?: "Detection failed"
+                    status = if (errorInfo.isTransient) PageStatus.WAITING else PageStatus.FAILED,
+                    waitingUntilEpochMs = if (errorInfo.isTransient) System.currentTimeMillis() + errorInfo.backoffMs else 0L,
+                    errorMessage = errorInfo.userMessage
                 )
-                RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, if (isRateLimit) "RATE_LIMIT" else "DETECT_FAIL", "${exception?.message} (${elapsedMs}ms)")
+                RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, errorInfo.eventTag, "${errorInfo.userMessage} (${elapsedMs}ms)")
                 onStatusUpdate(currentPage)
                 return@withContext currentPage
             }
@@ -251,13 +251,13 @@ class PagePipeline(
 
             if (transResult.isFailure) {
                 val exception = transResult.exceptionOrNull()
-                val isRateLimit = (exception is ApiException && exception.isRateLimited)
+                val errorInfo = classifyException(exception)
                 currentPage = currentPage.copy(
-                    status = if (isRateLimit) PageStatus.WAITING else PageStatus.FAILED,
-                    waitingUntilEpochMs = if (isRateLimit) System.currentTimeMillis() + 15000L else 0L,
-                    errorMessage = exception?.message ?: "Translation failed"
+                    status = if (errorInfo.isTransient) PageStatus.WAITING else PageStatus.FAILED,
+                    waitingUntilEpochMs = if (errorInfo.isTransient) System.currentTimeMillis() + errorInfo.backoffMs else 0L,
+                    errorMessage = errorInfo.userMessage
                 )
-                RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, if (isRateLimit) "RATE_LIMIT" else "TRANSLATE_FAIL", "${exception?.message} (${elapsedMs}ms)")
+                RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, errorInfo.eventTag, "${errorInfo.userMessage} (${elapsedMs}ms)")
                 onStatusUpdate(currentPage)
                 return@withContext currentPage
             }
@@ -322,4 +322,78 @@ class PagePipeline(
         onStatusUpdate(currentPage)
         return@withContext currentPage
     }
+
+    private fun classifyException(exception: Throwable?): ErrorDisposition {
+        if (exception == null) {
+            return ErrorDisposition(isTransient = false, isRateLimit = false, backoffMs = 0L, eventTag = "FAIL", userMessage = "Unknown error")
+        }
+
+        if (exception is ApiException) {
+            if (exception.isRateLimited) {
+                val retryMs = (exception.retryAfterMs ?: 20_000L).coerceAtLeast(10_000L)
+                return ErrorDisposition(
+                    isTransient = true,
+                    isRateLimit = true,
+                    backoffMs = retryMs,
+                    eventTag = "RATE_LIMIT",
+                    userMessage = exception.message
+                )
+            }
+            if (exception.statusCode in 500..599) {
+                val retryMs = (exception.retryAfterMs ?: 15_000L).coerceAtLeast(10_000L)
+                return ErrorDisposition(
+                    isTransient = true,
+                    isRateLimit = false,
+                    backoffMs = retryMs,
+                    eventTag = "SERVER_RETRY",
+                    userMessage = "Server temporary error (${exception.statusCode}): ${exception.message}"
+                )
+            }
+            if (exception.isInvalidKey) {
+                return ErrorDisposition(
+                    isTransient = false,
+                    isRateLimit = false,
+                    backoffMs = 0L,
+                    eventTag = "AUTH_FAIL",
+                    userMessage = "API Key Unauthorized (HTTP ${exception.statusCode}): ${exception.message}"
+                )
+            }
+        }
+
+        // Network / DNS / Timeout exceptions are transient
+        val isNetworkException = exception is java.net.UnknownHostException ||
+                exception is java.net.SocketTimeoutException ||
+                exception is java.net.ConnectException ||
+                exception is javax.net.ssl.SSLException ||
+                exception is java.io.IOException ||
+                (exception.message?.contains("Unable to resolve host", ignoreCase = true) == true) ||
+                (exception.message?.contains("timeout", ignoreCase = true) == true) ||
+                (exception.message?.contains("connection", ignoreCase = true) == true)
+
+        if (isNetworkException) {
+            return ErrorDisposition(
+                isTransient = true,
+                isRateLimit = false,
+                backoffMs = 12_000L,
+                eventTag = "NETWORK_RETRY",
+                userMessage = "Network/DNS issue (${exception.message}). Auto-retrying..."
+            )
+        }
+
+        return ErrorDisposition(
+            isTransient = false,
+            isRateLimit = false,
+            backoffMs = 0L,
+            eventTag = "FAIL",
+            userMessage = exception.message ?: "Failed"
+        )
+    }
 }
+
+private data class ErrorDisposition(
+    val isTransient: Boolean,
+    val isRateLimit: Boolean,
+    val backoffMs: Long,
+    val eventTag: String,
+    val userMessage: String
+)

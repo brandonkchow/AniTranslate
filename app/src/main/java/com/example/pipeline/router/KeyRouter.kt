@@ -114,8 +114,8 @@ class KeyRouter(private val slotStorage: SlotStorage) {
                 // 401 / 403: Badge slot invalid
                 slotStorage.markSlotInvalidKey(slot.id, true)
             } else if (isRateLimit) {
-                // 429 / 503 / Quota: Calculate backoff
-                val backoffMs = exception.retryAfterMs ?: calculateBackoffMs(slot.consecutiveRateLimits)
+                // 429 / 503 / Quota: Calculate backoff with parsed retry delay
+                val backoffMs = (exception.retryAfterMs ?: calculateBackoffMs(slot.consecutiveRateLimits)).coerceAtLeast(10_000L)
                 slotStorage.setSlotCooldown(slot.id, backoffMs, incrementRateLimits = true)
             }
         } else if (result.isSuccess) {
@@ -143,9 +143,9 @@ class KeyRouter(private val slotStorage: SlotStorage) {
 
     private fun calculateBackoffMs(consecutiveFailures: Int): Long {
         return when (consecutiveFailures) {
-            0 -> 15_000L  // 15s
-            1 -> 30_000L  // 30s
-            2 -> 60_000L  // 60s
+            0 -> 20_000L  // 20s
+            1 -> 35_000L  // 35s
+            2 -> 65_000L  // 65s
             else -> 180_000L // Cap at 180s (3m)
         }
     }

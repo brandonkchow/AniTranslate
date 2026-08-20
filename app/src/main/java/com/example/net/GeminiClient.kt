@@ -29,7 +29,7 @@ class GeminiClient {
                 Result.success("Key valid (HTTP $code)")
             } else {
                 val errorMsg = extractErrorMessage(body, code)
-                Result.failure(ApiException(code, errorMsg, extractRetryAfter(response.header("Retry-After"))))
+                Result.failure(ApiException(code, errorMsg, extractRetryAfter(response.header("Retry-After"), body)))
             }
         } catch (e: Exception) {
             Result.failure(e)
@@ -121,7 +121,7 @@ class GeminiClient {
 
             if (!response.isSuccessful) {
                 val errorMsg = extractErrorMessage(body, code)
-                return@withContext Result.failure(ApiException(code, errorMsg, extractRetryAfter(response.header("Retry-After"))))
+                return@withContext Result.failure(ApiException(code, errorMsg, extractRetryAfter(response.header("Retry-After"), body)))
             }
 
             val textResponse = extractGeminiResponseText(body)
@@ -214,7 +214,7 @@ class GeminiClient {
 
             if (!response.isSuccessful) {
                 val errorMsg = extractErrorMessage(body, code)
-                return@withContext Result.failure(ApiException(code, errorMsg, extractRetryAfter(response.header("Retry-After"))))
+                return@withContext Result.failure(ApiException(code, errorMsg, extractRetryAfter(response.header("Retry-After"), body)))
             }
 
             val textResponse = extractGeminiResponseText(body)
@@ -299,7 +299,7 @@ class GeminiClient {
 
             if (!response.isSuccessful) {
                 val errorMsg = extractErrorMessage(body, code)
-                return@withContext Result.failure(ApiException(code, errorMsg, extractRetryAfter(response.header("Retry-After"))))
+                return@withContext Result.failure(ApiException(code, errorMsg, extractRetryAfter(response.header("Retry-After"), body)))
             }
 
             val textResponse = extractGeminiResponseText(body)
@@ -432,12 +432,58 @@ class GeminiClient {
         }
     }
 
-    private fun extractRetryAfter(header: String?): Long? {
-        if (header == null) return null
-        return try {
-            header.toLongOrNull()?.times(1000)
-        } catch (e: Exception) {
-            null
+    private fun extractRetryAfter(header: String?, body: String? = null): Long? {
+        // 1. Check Retry-After HTTP response header (seconds)
+        if (!header.isNullOrBlank()) {
+            val headerSecs = header.trim().toDoubleOrNull()
+            if (headerSecs != null) {
+                return (headerSecs * 1000).toLong().coerceAtLeast(1000L)
+            }
         }
+        // 2. Check JSON error.details retryDelay: "18.302319871s" or "300ms"
+        if (!body.isNullOrBlank()) {
+            try {
+                val json = JSONObject(body)
+                val err = json.optJSONObject("error")
+                val details = err?.optJSONArray("details")
+                if (details != null) {
+                    for (i in 0 until details.length()) {
+                        val d = details.optJSONObject(i) ?: continue
+                        val retryDelayStr = d.optString("retryDelay", "")
+                        if (retryDelayStr.isNotBlank()) {
+                            val parsed = parseDurationStringToMs(retryDelayStr)
+                            if (parsed != null) return parsed
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+
+            // 3. Check regex on error message: "Please retry in 18.302319871s" or "retry in 361.532506ms"
+            val regexSec = Regex("""retry in ([0-9]+(?:\.[0-9]+)?)\s*s""", RegexOption.IGNORE_CASE)
+            val matchSec = regexSec.find(body)
+            if (matchSec != null) {
+                val secs = matchSec.groupValues[1].toDoubleOrNull()
+                if (secs != null) return ((secs + 1.5) * 1000).toLong() // add 1.5s safety buffer
+            }
+
+            val regexMs = Regex("""retry in ([0-9]+(?:\.[0-9]+)?)\s*ms""", RegexOption.IGNORE_CASE)
+            val matchMs = regexMs.find(body)
+            if (matchMs != null) {
+                val ms = matchMs.groupValues[1].toDoubleOrNull()
+                if (ms != null) return (ms + 1000).toLong() // add 1000ms safety buffer
+            }
+        }
+        return null
+    }
+
+    private fun parseDurationStringToMs(str: String): Long? {
+        val clean = str.trim()
+        if (clean.endsWith("ms", ignoreCase = true)) {
+            return clean.removeSuffix("ms").toDoubleOrNull()?.let { (it + 500).toLong() }
+        }
+        if (clean.endsWith("s", ignoreCase = true)) {
+            return clean.removeSuffix("s").toDoubleOrNull()?.let { ((it + 1.5) * 1000).toLong() }
+        }
+        return clean.toDoubleOrNull()?.let { ((it + 1.5) * 1000).toLong() }
     }
 }
