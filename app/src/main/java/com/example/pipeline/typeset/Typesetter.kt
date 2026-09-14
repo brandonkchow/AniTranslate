@@ -80,7 +80,26 @@ object Typesetter {
                 isShout = isShout
             )
 
-            // Draw centered within the bubble
+            // Dual-Pass Rendering:
+            // Pass 1: Crisp white outer stroke halo (guarantees readability on screentones & dark art)
+            val strokeWidthPx = (optimalPaint.textSize * 0.16f).coerceIn(2.5f * densityScale, 6.0f * densityScale)
+            val strokePaint = TextPaint(optimalPaint).apply {
+                style = Paint.Style.STROKE
+                strokeWidth = strokeWidthPx
+                strokeJoin = Paint.Join.ROUND
+                strokeCap = Paint.Cap.ROUND
+                color = Color.WHITE
+            }
+
+            val strokeLayout = StaticLayout.Builder
+                .obtain(text, 0, text.length, strokePaint, availableWidth)
+                .setAlignment(Layout.Alignment.ALIGN_CENTER)
+                .setLineSpacing(0f, 0.92f)
+                .setIncludePad(false)
+                .setMaxLines(maxLines)
+                .build()
+
+            // Draw centered within the bubble: Stroke first, then solid fill
             canvas.save()
             val textLayoutHeight = optimalLayout.height.toFloat()
             val textLayoutWidth = optimalLayout.width.toFloat()
@@ -88,6 +107,7 @@ object Typesetter {
             val drawY = topPx + (boxHeight - textLayoutHeight) / 2f
 
             canvas.translate(drawX, drawY)
+            strokeLayout.draw(canvas)
             optimalLayout.draw(canvas)
             canvas.restore()
         }

@@ -107,7 +107,8 @@ class PagePipeline(
             val detectResult = keyRouter.executeWithSlot(PipelineStage.DETECT_OCR, slot) { s ->
                 when (s.provider) {
                     ApiProvider.GEMINI -> geminiClient.detectBubbles(s.baseUrl, s.apiKey, s.model, base64)
-                    ApiProvider.OPENROUTER, ApiProvider.CUSTOM -> openAiClient.detectBubbles(s.baseUrl, s.apiKey, s.model, base64, provider = s.provider)
+                    ApiProvider.OPENROUTER, ApiProvider.CUSTOM, ApiProvider.WORKSTATION, ApiProvider.HUGGINGFACE ->
+                        openAiClient.detectBubbles(s.baseUrl, s.apiKey, s.model, base64, provider = s.provider)
                     ApiProvider.GROQ -> Result.failure(IllegalArgumentException("Groq does not support image detection."))
                 }
             }
@@ -142,7 +143,8 @@ class PagePipeline(
                 val fallbackResult = keyRouter.executeWithSlot(PipelineStage.DETECT_OCR, slot) { s ->
                     when (s.provider) {
                         ApiProvider.GEMINI -> geminiClient.scanAllText(s.baseUrl, s.apiKey, s.model, base64)
-                        ApiProvider.OPENROUTER, ApiProvider.CUSTOM -> openAiClient.scanAllText(s.baseUrl, s.apiKey, s.model, base64, provider = s.provider)
+                        ApiProvider.OPENROUTER, ApiProvider.CUSTOM, ApiProvider.WORKSTATION, ApiProvider.HUGGINGFACE ->
+                            openAiClient.scanAllText(s.baseUrl, s.apiKey, s.model, base64, provider = s.provider)
                         ApiProvider.GROQ -> Result.failure(IllegalArgumentException("Groq does not support image detection."))
                     }
                 }
@@ -243,7 +245,7 @@ class PagePipeline(
             val transResult = keyRouter.executeWithSlot(PipelineStage.TRANSLATE, slot) { s ->
                 when (s.provider) {
                     ApiProvider.GEMINI -> geminiClient.translateBubbles(s.baseUrl, s.apiKey, s.model, bubbles, storyContext = storyContext)
-                    ApiProvider.GROQ, ApiProvider.OPENROUTER, ApiProvider.CUSTOM ->
+                    ApiProvider.GROQ, ApiProvider.OPENROUTER, ApiProvider.CUSTOM, ApiProvider.WORKSTATION, ApiProvider.HUGGINGFACE ->
                         openAiClient.translateBubbles(s.baseUrl, s.apiKey, s.model, bubbles, provider = s.provider, storyContext = storyContext)
                 }
             }

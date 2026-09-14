@@ -118,6 +118,24 @@ class SlotStorage private constructor(private val context: Context) {
                 baseUrl = "https://generativelanguage.googleapis.com/v1beta",
                 role = SlotRole.ANY,
                 enabled = true
+            ),
+            ApiSlot(
+                provider = ApiProvider.GROQ,
+                label = "Groq: Llama 3.3 70B (Fast & Free)",
+                apiKey = "",
+                model = "llama-3.3-70b-versatile",
+                baseUrl = "https://api.groq.com/openai/v1",
+                role = SlotRole.TRANSLATE,
+                enabled = true
+            ),
+            ApiSlot(
+                provider = ApiProvider.WORKSTATION,
+                label = "Workstation (RTX 5080 via Tailscale)",
+                apiKey = "",
+                model = "manga-image-translator",
+                baseUrl = "http://100.110.101.42:5003",
+                role = SlotRole.ANY,
+                enabled = false
             )
         )
     }

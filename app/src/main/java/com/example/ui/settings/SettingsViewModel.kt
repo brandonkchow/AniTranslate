@@ -152,7 +152,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
             val result = when (slot.provider) {
                 ApiProvider.GEMINI -> geminiClient.testKey(slot.baseUrl, slot.apiKey)
-                ApiProvider.GROQ, ApiProvider.OPENROUTER, ApiProvider.CUSTOM ->
+                ApiProvider.GROQ, ApiProvider.OPENROUTER, ApiProvider.CUSTOM, ApiProvider.WORKSTATION, ApiProvider.HUGGINGFACE ->
                     openAiClient.testKey(slot.baseUrl, slot.apiKey, slot.provider)
             }
 

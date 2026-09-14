@@ -38,7 +38,7 @@ class KeyRouter(private val slotStorage: SlotStorage) {
 
         val matchingSlots = slots.filter { slot ->
             slot.enabled &&
-            slot.apiKey.isNotBlank() &&
+            (slot.apiKey.isNotBlank() || slot.provider == ApiProvider.WORKSTATION || slot.provider == ApiProvider.HUGGINGFACE) &&
             !slot.isInvalidKey &&
             when (stage) {
                 PipelineStage.DETECT_OCR -> (slot.role == SlotRole.DETECT_OCR || slot.role == SlotRole.ANY) && slot.isVisionSupported

@@ -47,6 +47,24 @@ enum class ApiProvider(
             "gemma2-9b-it" to "Gemma 2 9B IT (Free)"
         )
     ),
+    WORKSTATION(
+        displayName = "Workstation (RTX 5080)",
+        defaultBaseUrl = "http://100.110.101.42:5003",
+        defaultModel = "manga-image-translator",
+        isVisionCapable = true,
+        recommendedModels = listOf(
+            "manga-image-translator" to "manga-image-translator (CTD + LaMa + MangaOCR)"
+        )
+    ),
+    HUGGINGFACE(
+        displayName = "Hugging Face (Free Space)",
+        defaultBaseUrl = "https://zyddnys-manga-image-translator.hf.space",
+        defaultModel = "manga-image-translator",
+        isVisionCapable = true,
+        recommendedModels = listOf(
+            "manga-image-translator" to "manga-image-translator (Free Space)"
+        )
+    ),
     CUSTOM(
         displayName = "Custom",
         defaultBaseUrl = "",
