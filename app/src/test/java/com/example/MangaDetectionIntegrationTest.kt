@@ -27,7 +27,7 @@ import org.robolectric.annotation.Config
 import java.io.File
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36])
+@Config(sdk = [34])
 class MangaDetectionIntegrationTest {
 
     private lateinit var context: Context
@@ -40,8 +40,9 @@ class MangaDetectionIntegrationTest {
 
     private fun loadTestBitmap(): Pair<Bitmap, String> {
         val candidates = listOf(
+            File("../assets/sample.jpg"),
+            File("assets/sample.jpg"),
             File("assets/.aistudio/sample.jpg"),
-            File("/assets/.aistudio/sample.jpg"),
             File("app/src/main/assets/sample.jpg"),
             File("app/src/test/resources/sample.jpg"),
             File("sample.jpg")
@@ -139,10 +140,9 @@ class MangaDetectionIntegrationTest {
 
     @Test
     fun testSyntheticMangaPageDetectionAndWiping() = runBlocking {
-        val testBitmap = createTestMangaBitmap()
+        val (testBitmap, sourceInfo) = loadTestBitmap()
         assertNotNull(testBitmap)
-        assertEquals(800, testBitmap.width)
-        assertEquals(1200, testBitmap.height)
+        println("[TEST] Pipeline test using: $sourceInfo")
 
         val sampleBubbles = listOf(
             Bubble(

@@ -23,7 +23,7 @@ import java.util.zip.ZipOutputStream
 import kotlinx.coroutines.runBlocking
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36])
+@Config(sdk = [34])
 class RunLoggerAndZipTest {
 
     private lateinit var application: Application
