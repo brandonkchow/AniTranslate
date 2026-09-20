@@ -21,6 +21,11 @@ android {
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    // ONNX Runtime ships ~18 MB of native code per ABI, which took the debug APK to 106 MB with
+    // all four bundled. Ship only what we actually run on: arm64 for the device fleet, plus
+    // x86_64 so emulator-based test runs keep working.
+    ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
   }
 
   signingConfigs {
@@ -119,6 +124,8 @@ dependencies {
   implementation(libs.okhttp)
   // implementation(libs.play.services.location)
   implementation(libs.retrofit)
+  // Tier 1 on-device detection: pre-built ORT binary; weights ship as a decoupled asset.
+  implementation(libs.onnxruntime.android)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)

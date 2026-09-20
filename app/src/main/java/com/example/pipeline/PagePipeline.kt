@@ -9,6 +9,10 @@ import com.example.data.slots.ApiSlot
 import com.example.net.ApiException
 import com.example.net.GeminiClient
 import com.example.net.OpenAiCompatibleClient
+import com.example.pipeline.detect.BubbleTextMerger
+import com.example.pipeline.detect.DetectedRegion
+import com.example.pipeline.detect.DetectorPostProcess
+import com.example.pipeline.detect.OnnxBubbleDetector
 import com.example.pipeline.image.ImageScaler
 import com.example.pipeline.router.KeyRouter
 import com.example.pipeline.router.PipelineStage
@@ -25,6 +29,13 @@ class PagePipeline(
     private val geminiClient: GeminiClient,
     private val openAiClient: OpenAiCompatibleClient
 ) {
+
+    /**
+     * Tier 1 on-device detector. Held for the lifetime of the pipeline because building an
+     * ORT session means loading a 10.6 MB graph — doing that per page would dominate the
+     * page's runtime. Lazy so a device that cannot load it pays nothing.
+     */
+    private val bubbleDetector: OnnxBubbleDetector by lazy { OnnxBubbleDetector(context) }
 
     suspend fun processPage(
         page: PageEntity,
@@ -85,6 +96,47 @@ class PagePipeline(
                 return@withContext currentPage
             }
             val base64 = ImageScaler.bitmapToBase64(workingBmp, quality = 85)
+
+            // ---- Tier 1: on-device geometry ------------------------------------------
+            // The detector owns bubble geometry; the vision slot below is asked only to read
+            // text. Letting a VLM own boxes is what produced three identically-sized 12%-wide
+            // boxes for three differently-sized bubbles — roughly 60% undersized — which then
+            // sheared the bubble walls while wiping and truncated the typeset text.
+            var detectorBubbles: List<DetectedRegion>
+            var detectorTextBubbles: List<DetectedRegion>
+            var detectorFloating: List<DetectedRegion>
+            val detectorStartMs = System.currentTimeMillis()
+            try {
+                val regions = if (bubbleDetector.loadModel()) {
+                    bubbleDetector.detect(workingBmp)
+                } else {
+                    emptyList()
+                }
+                detectorBubbles = DetectorPostProcess.suppressDuplicates(
+                    DetectorPostProcess.bubbleRegions(regions)
+                )
+                detectorTextBubbles = DetectorPostProcess.textBubbleRegions(regions)
+                detectorFloating = DetectorPostProcess.freeTextRegions(regions)
+                RunLogger.logPageEvent(
+                    context, currentPage.jobId, currentPage.pageIndex, "DETECT_ONNX",
+                    if (regions.isEmpty()) {
+                        "On-device detector found no regions in ${System.currentTimeMillis() - detectorStartMs}ms — using cloud vision geometry."
+                    } else {
+                        "On-device detector: ${detectorBubbles.size} bubble(s), ${detectorTextBubbles.size} text block(s), " +
+                            "${detectorFloating.size} free-text region(s) in ${System.currentTimeMillis() - detectorStartMs}ms."
+                    }
+                )
+            } catch (t: Throwable) {
+                // Tier 1 is an optimisation, never a dependency: any failure must degrade to
+                // exactly the cloud-only behaviour that shipped before it existed.
+                detectorBubbles = emptyList()
+                detectorTextBubbles = emptyList()
+                detectorFloating = emptyList()
+                RunLogger.logPageEvent(
+                    context, currentPage.jobId, currentPage.pageIndex, "DETECT_ONNX",
+                    "On-device detector failed (${t.message}) — using cloud vision geometry."
+                )
+            }
 
             // Multi-slot fallback: a vision slot that is rate-limited, policy-excluded, or
             // otherwise unable to serve this page must not abort the job when another configured
@@ -167,6 +219,53 @@ class PagePipeline(
                 RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, errorInfo.eventTag, "$detail (${elapsedMs}ms)")
                 onStatusUpdate(currentPage)
                 return@withContext currentPage
+            }
+
+            // ---- Fuse detector geometry with vision text -------------------------------
+            // The detector's boxes are authoritative; the vision slot above contributed only
+            // its reading of the text. Matching is by centre-containment, which recovers the
+            // text even when the vision box was badly sized but still sat on the right bubble.
+            if (detectorBubbles.isNotEmpty()) {
+                val vlmEntries = bubbles.map {
+                    BubbleTextMerger.VlmEntry(text = it.text, box = it.box, vertical = it.vertical)
+                }
+                val merged = BubbleTextMerger.merge(
+                    bubbles = detectorBubbles,
+                    vlm = vlmEntries,
+                    textBubbles = detectorTextBubbles,
+                    floating = detectorFloating,
+                    srcWidth = workingBmp.width,
+                    srcHeight = workingBmp.height
+                ).filter { it.text.isNotBlank() }
+
+                val placedFromDetector = merged.count { it.source == BubbleTextMerger.SOURCE_DETECTOR }
+
+                if (merged.isNotEmpty()) {
+                    val visionBoxCount = bubbles.size
+                    bubbles = merged.mapIndexed { index, m ->
+                        Bubble(
+                            id = index + 1,
+                            text = m.text,
+                            box = m.box,
+                            vertical = m.vertical,
+                            type = if (m.source == BubbleTextMerger.SOURCE_FLOATING) "floating" else "bubble"
+                        )
+                    }
+                    RunLogger.logPageEvent(
+                        context, currentPage.jobId, currentPage.pageIndex, "DETECT_MERGE",
+                        "Replaced $visionBoxCount vision box(es) with detector geometry: " +
+                            "$placedFromDetector bubble(s) matched text, " +
+                            "${detectorBubbles.size - placedFromDetector} left untouched (no text inside), " +
+                            "${merged.count { it.vertical }} of ${merged.size} oriented vertical."
+                    )
+                } else {
+                    // Nothing we read landed inside a detected bubble — that is a real signal
+                    // about the vision slot, so say so rather than failing silently.
+                    RunLogger.logPageEvent(
+                        context, currentPage.jobId, currentPage.pageIndex, "DETECT_MERGE",
+                        "Detector found ${detectorBubbles.size} bubble(s) but no vision text fell inside any of them — keeping vision geometry."
+                    )
+                }
             }
 
             val activeDetectSlot: ApiSlot = detectSlot ?: run {

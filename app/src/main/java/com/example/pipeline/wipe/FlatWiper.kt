@@ -28,7 +28,6 @@ object FlatWiper {
         val bmpWidth = sourceBitmap.width
         val bmpHeight = sourceBitmap.height
         val densityScale = max(1.0f, max(bmpWidth, bmpHeight) / 1000f)
-        val contourSafetyMargin = (2f * densityScale).coerceIn(1f, 5f)
 
         for (bubble in bubbles) {
             if (!bubble.visible) continue
@@ -41,6 +40,12 @@ object FlatWiper {
             val boxW = rightPx - leftPx
             val boxH = bottomPx - topPx
             if (boxW <= 2 || boxH <= 2) continue
+
+            // Inset the geometric wipe inside the bubble wall. A fixed pixel margin does not
+            // scale: 2.7px is ~1% of a 290px bubble so the oval grazes and nicks the wall,
+            // while the same 2.7px is a large fraction of a small bubble. Size the inset to
+            // the region instead, with a floor so small regions still clear their outline.
+            val wipeInset = max(4f * densityScale, 0.05f * min(boxW, boxH))
 
             val sampledColor = sampleBubbleInteriorColor(sourceBitmap, leftPx, topPx, rightPx, bottomPx)
 
@@ -63,10 +68,10 @@ object FlatWiper {
                     "narration" -> {
                         // Rectangular narration box with minimal inset
                         val rectF = RectF(
-                            leftPx + contourSafetyMargin,
-                            topPx + contourSafetyMargin,
-                            rightPx - contourSafetyMargin,
-                            bottomPx - contourSafetyMargin
+                            leftPx + wipeInset,
+                            topPx + wipeInset,
+                            rightPx - wipeInset,
+                            bottomPx - wipeInset
                         )
                         val cornerRadius = 3f * densityScale
                         canvas.drawRoundRect(rectF, cornerRadius, cornerRadius, paint)
@@ -85,10 +90,10 @@ object FlatWiper {
                     else -> {
                         // Standard Speech / Thought Bubble: Inset contour-safe oval or rounded rect
                         val rectF = RectF(
-                            leftPx + contourSafetyMargin,
-                            topPx + contourSafetyMargin,
-                            rightPx - contourSafetyMargin,
-                            bottomPx - contourSafetyMargin
+                            leftPx + wipeInset,
+                            topPx + wipeInset,
+                            rightPx - wipeInset,
+                            bottomPx - wipeInset
                         )
 
                         val width = rectF.width()
