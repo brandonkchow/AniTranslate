@@ -103,9 +103,9 @@ class SlotStorage private constructor(private val context: Context) {
         return listOf(
             ApiSlot(
                 provider = ApiProvider.OPENROUTER,
-                label = "NVIDIA: Nemotron 3 Super (free)",
+                label = "OpenRouter: Llama 3.3 70B (free, ZDR)",
                 apiKey = "",
-                model = "nvidia/nemotron-3-super-120b-a12b:free",
+                model = "meta-llama/llama-3.3-70b-instruct:free",
                 baseUrl = "https://openrouter.ai/api/v1",
                 role = SlotRole.TRANSLATE,
                 enabled = true

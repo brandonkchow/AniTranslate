@@ -32,7 +32,10 @@ class KeyRouter(private val slotStorage: SlotStorage) {
         return visionSemaphores.computeIfAbsent(slotId) { Semaphore(1) }
     }
 
-    suspend fun getAvailableSlot(stage: PipelineStage): Pair<ApiSlot?, Long?> = routerMutex.withLock {
+    suspend fun getAvailableSlot(
+        stage: PipelineStage,
+        excludeSlotIds: Set<String> = emptySet()
+    ): Pair<ApiSlot?, Long?> = routerMutex.withLock {
         val now = System.currentTimeMillis()
         val slots = slotStorage.slots.value
 
@@ -40,6 +43,7 @@ class KeyRouter(private val slotStorage: SlotStorage) {
             slot.enabled &&
             (slot.apiKey.isNotBlank() || slot.provider == ApiProvider.WORKSTATION || slot.provider == ApiProvider.HUGGINGFACE) &&
             !slot.isInvalidKey &&
+            slot.id !in excludeSlotIds &&
             when (stage) {
                 PipelineStage.DETECT_OCR -> (slot.role == SlotRole.DETECT_OCR || slot.role == SlotRole.ANY) && slot.isVisionSupported
                 PipelineStage.TRANSLATE -> (slot.role == SlotRole.TRANSLATE || slot.role == SlotRole.ANY)
@@ -113,6 +117,11 @@ class KeyRouter(private val slotStorage: SlotStorage) {
             if (exception.isInvalidKey) {
                 // 401 / 403: Badge slot invalid
                 slotStorage.markSlotInvalidKey(slot.id, true)
+            } else if (exception.message.contains("ZDR violation", ignoreCase = true) ||
+                       exception.message.contains("guardrail restrictions", ignoreCase = true) ||
+                       exception.message.contains("data policy", ignoreCase = true)) {
+                // Policy exclusion: cooldown for 15 minutes to let alternative slots handle requests
+                slotStorage.setSlotCooldown(slot.id, 900_000L, incrementRateLimits = false)
             } else if (isRateLimit) {
                 // 429 / 503 / Quota: Calculate backoff with parsed retry delay
                 val backoffMs = (exception.retryAfterMs ?: calculateBackoffMs(slot.consecutiveRateLimits)).coerceAtLeast(10_000L)

@@ -25,14 +25,14 @@ enum class ApiProvider(
     OPENROUTER(
         displayName = "OpenRouter",
         defaultBaseUrl = "https://openrouter.ai/api/v1",
-        defaultModel = "nvidia/nemotron-3-super-120b-a12b:free",
+        defaultModel = "meta-llama/llama-3.3-70b-instruct:free",
         isVisionCapable = true,
         recommendedModels = listOf(
-            "nvidia/nemotron-3-super-120b-a12b:free" to "NVIDIA: Nemotron 3 Super (Free · 120B Translate)",
+            "meta-llama/llama-3.3-70b-instruct:free" to "Meta: Llama 3.3 70B Instruct (Free · ZDR-safe)",
             "google/gemini-2.0-flash-exp:free" to "Gemini 2.0 Flash Exp (Free · Vision + Translate)",
-            "meta-llama/llama-3.3-70b-instruct:free" to "Meta: Llama 3.3 70B Instruct (Free)",
             "qwen/qwen-2.5-vl-72b-instruct:free" to "Qwen 2.5 VL 72B (Free · Vision + Translate)",
             "deepseek/deepseek-chat:free" to "DeepSeek V3 (Free · Translate)",
+            "nvidia/nemotron-3-super-120b-a12b:free" to "NVIDIA: Nemotron 3 Super (Free · ZDR-excluded accounts may fail)",
             "openai/gpt-4o-mini" to "OpenAI: GPT-4o Mini (Paid)"
         )
     ),
