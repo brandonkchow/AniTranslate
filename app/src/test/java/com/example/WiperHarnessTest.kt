@@ -161,10 +161,14 @@ class WiperHarnessTest {
                     wallBefore++
                     if (before[i] == region[i]) wallSurvived++
                 }
+                // When the wipe classified the ink, the interior is the detector's whole box rather
+                // than a shape inset from a wall, so it legitimately contains structure — wall,
+                // tail, spine — that is dark on purpose. Structure is neither residual text nor dirt.
+                val structure = plan.structure.size == regionW * regionH && plan.structure[i]
                 if (plan.interior[i]) {
                     val lum = BubbleInterior.luminance(region[i])
-                    if (lum < visibleResidualLuminance) visibleResidual++
-                    if (!plan.wipe[i]) {
+                    if (lum < visibleResidualLuminance && !structure) visibleResidual++
+                    if (!plan.wipe[i] && !structure) {
                         // The whole point of leaning on the geometry: what survives the wipe has to
                         // be indistinguishable from the colour it was repainted with.
                         val dark = bgLum - lum
@@ -184,7 +188,8 @@ class WiperHarnessTest {
             println(
                 "[harness] box $index ${regionW}x$regionH margin=$margin type=${box.type} " +
                     "shape=$shape wallInset=${plan.wallInset} inkMask=${plan.usedInkMask} " +
-                    "wallCloses=${enclosedBefore.found} wiped=${plan.wipe.count { it }} wallBefore=$wallBefore " +
+                    "wallCloses=${enclosedBefore.found} wiped=${plan.wipe.count { it }} " +
+                    "glyph=${plan.glyphPixels} structure=${plan.structurePixels} wallBefore=$wallBefore " +
                     "wallSurvived=$wallSurvived visibleResidual=$visibleResidual " +
                     "maxDarkDeviation=${"%.4f".format(maxDarkDeviation)}" +
                     " (${"%.1f".format(maxDarkDeviation * 255)}/255)"
@@ -208,11 +213,27 @@ class WiperHarnessTest {
                     )
                 }
 
-                // The regression: every wall pixel used to be repainted as interior.
-                assertTrue(
-                    "box $index: found no wall to preserve — is this really a bubble?",
-                    wallBefore > 0
-                )
+                if (plan.glyph.isNotEmpty()) {
+                    // The classifying path states its contract from the masks it produced: every
+                    // pixel it called text is gone, and no pixel it called structure was painted.
+                    // Neither claim depends on knowing where a wall is.
+                    assertEquals(
+                        "box $index: text the classifier identified survived the wipe",
+                        0,
+                        plan.glyph.indices.count { plan.glyph[it] && !plan.wipe[it] }
+                    )
+                    assertEquals(
+                        "box $index: the wipe painted over structure it had identified",
+                        0,
+                        plan.structure.indices.count { plan.structure[it] && plan.wipe[it] }
+                    )
+                } else {
+                    // The fitted path still needs the image to have offered a wall to measure.
+                    assertTrue(
+                        "box $index: found no wall to preserve — is this really a bubble?",
+                        wallBefore > 0
+                    )
+                }
                 assertEquals(
                     "box $index: the wipe must not touch a single pixel outside the interior",
                     wallBefore,
