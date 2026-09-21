@@ -126,8 +126,11 @@ cd ~/projects/AniTranslate
 #    Count from app/build/test-results/testDebugUnitTest/*.xml, never from the build banner:
 #    "BUILD SUCCESSFUL" is also what you get when the tests were up-to-date and never ran.
 
-# 2. The focus page. Copy it out of Downloads first (/tmp may have been cleared).
-cp ~/Downloads/atxs52s7fnv21.jpg /tmp/page.jpg
+# 2. The focus page. Prefer the durable fixture — /tmp is cleared on every reboot.
+#    ~/.local/share/anitranslate/fixtures/focus_page.jpg (724,369 B, md5 10fdd04ae630447606cb5ebc6032efe5)
+#    Source copy lives in ~/Downloads/atxs52s7fnv21.jpg; both are outside git on purpose (a scan is
+#    not ours to bake into history).
+cp ~/.local/share/anitranslate/fixtures/focus_page.jpg /tmp/page.jpg
 ./gradlew testDebugUnitTest --tests '*WiperHarnessTest*' --rerun-tasks --console=plain \
   -Pharness.page=/tmp/page.jpg \
   -Pharness.out=/tmp/wiped_new.png \
@@ -138,8 +141,10 @@ cp ~/Downloads/atxs52s7fnv21.jpg /tmp/page.jpg
 #     glyph=3004 structure=7584, box 8 wallCloses=false glyph=913 structure=8975)
 
 # 3. Regression page — the smooth-ellipse page the old model was tuned on. Must stay green.
-#    Source: /tmp/j4/img/working_4.jpg (a /tmp path — copy it somewhere durable if it is still there,
-#    and re-extract any page with the same character if it is gone).
+#    FIXTURE LOST (verified 2026-09-21): /tmp/j4/img/working_4.jpg no longer exists and no durable
+#    copy was ever made, so this step CANNOT currently be run. Re-extract a page with the same
+#    character (smooth clean-ellipse bubbles) and keep it in ~/.local/share/anitranslate/fixtures/.
+#    Treat "no regression fixture" as an open coverage gap, not as a pass.
 ./gradlew testDebugUnitTest --tests '*WiperHarnessTest*' --console=plain \
   -Pharness.page=/tmp/j4/img/working_4.jpg \
   -Pharness.out=/tmp/wiped_regress.png \
