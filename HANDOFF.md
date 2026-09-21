@@ -118,6 +118,22 @@ cp ~/Downloads/atxs52s7fnv21.jpg /tmp/page.jpg
   `adb install -r app/build/outputs/apk/debug/app-debug.apk`. **The phone answers ping on the LAN with
   the toggle off, so reachability proves nothing about installability.**
 
+## Verifying on the phone without asking anyone to eyeball it
+
+- `adb mdns services` lists **stale ports for the same device alongside the live one** (three records,
+  one device). The live port is whichever accepts `adb connect`; the stale ones return *Connection
+  refused*. Try every address it prints before concluding the device is unreachable.
+- The debug build is `run-as`-able:
+  `adb shell run-as com.aistudio.bubbleforge.mngtr sh -c '...'`.
+- Every processed page leaves **`cache/final_<N>.png`** plus a per-job dir (`cache/job_<N>/orig_1.png`),
+  and each run writes **`files/run_logs/run_<id>_job_<N>.log`** — detector results, per-bubble source
+  text, which translator slot ran and any guardrail refusal, then the wipe and typeset stages.
+- **So on-device verification is: run the page, pull `final_<N>.png`, diff it against the PC render.**
+  No eyes required.
+- **Prove the phone ran the code under test** rather than assuming the build came from the right tree:
+  the class must be in the dex (`unzip -p app-debug.apk classes5.dex | strings | grep EnclosedInterior`)
+  **and** the local APK's md5 must equal the device's `/data/app/.../base.apk` md5.
+
 **Then the check that matters most — pixel-diff the new wipe against the last shipped build.**
 The three fallback boxes must be **byte-identical**; the six measured boxes should change. If a
 fallback box moved, you have re-broken the frame rule in §3.3.
