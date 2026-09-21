@@ -102,6 +102,22 @@ cp ~/Downloads/atxs52s7fnv21.jpg /tmp/page.jpg
   -Pharness.boxes="0.0713,0.0529,0.4296,0.2200,speech;0.6092,0.0461,0.9298,0.2281,speech;0.5679,0.5423,0.9313,0.8290,speech"
 ```
 
+## Build, sign, install (verified 2026-09-20)
+
+- **The app is debug-signed, and that is currently the only option.** `app/build.gradle.kts` takes the
+  release key from `$KEYSTORE_PATH` else `${rootDir}/my-upload-key.jks`, and that file **exists nowhere
+  on this host** (it was probably a `/tmp` artifact). `assembleRelease` therefore dies at
+  `:app:packageRelease` with *"storeFile specifies file ... which doesn't exist"*. The only APK ever
+  produced is `app/build/outputs/apk/debug/app-debug.apk` — which is what the phone runs — so a debug
+  rebuild installs over it cleanly. **Do not burn time on `assembleRelease` until the key is restored.**
+- **Build:** `./gradlew assembleDebug` (~9 s warm; ~71.7 MB, arm64-v8a only).
+- **Installing needs the phone's Wireless debugging toggled ON.** Its port changes on screen lock and on
+  `adb` restarts, so it can never be cached: while the toggle is off, `adb mdns services` discovers
+  nothing. Turn it on (Settings → Developer options → Wireless debugging), then either read the port off
+  that screen or let mDNS find it, and run
+  `adb install -r app/build/outputs/apk/debug/app-debug.apk`. **The phone answers ping on the LAN with
+  the toggle off, so reachability proves nothing about installability.**
+
 **Then the check that matters most — pixel-diff the new wipe against the last shipped build.**
 The three fallback boxes must be **byte-identical**; the six measured boxes should change. If a
 fallback box moved, you have re-broken the frame rule in §3.3.
