@@ -121,7 +121,10 @@ cd ~/projects/AniTranslate
 
 # 1. Full JVM suite (the harness skips itself unless -Pharness.page is passed, so CI is untouched).
 ./gradlew testDebugUnitTest --rerun-tasks --console=plain
-#    expect: 94 tests, 0 failures, 1 skipped
+#    expect: 103 tests, 0 failures, 0 errors, 1 skipped
+#    The 1 skip IS WiperHarnessTest, self-skipping by design — run step 2 to exercise it.
+#    Count from app/build/test-results/testDebugUnitTest/*.xml, never from the build banner:
+#    "BUILD SUCCESSFUL" is also what you get when the tests were up-to-date and never ran.
 
 # 2. The focus page. Copy it out of Downloads first (/tmp may have been cleared).
 cp ~/Downloads/atxs52s7fnv21.jpg /tmp/page.jpg
@@ -130,6 +133,9 @@ cp ~/Downloads/atxs52s7fnv21.jpg /tmp/page.jpg
   -Pharness.out=/tmp/wiped_new.png \
   -Pharness.boxes="0.5023,0.5105,0.7401,0.6948,speech;0.5024,0.2650,0.7265,0.4273,speech;0.4637,0.7988,0.7548,0.9579,speech;0.6374,0.0364,0.9064,0.2265,speech;0.7323,0.7667,0.9439,0.9674,speech;0.0599,0.3482,0.2869,0.4961,speech;0.0589,0.8088,0.2925,0.9681,speech;0.3145,0.6192,0.4978,0.7463,speech;0.3454,0.5103,0.5001,0.6141,speech"
 #    (those 9 boxes are the detector's own output for this page — you do not need to re-run ONNX)
+#    expect: 9 lines, every one visibleResidual=0 with wallBefore == wallSurvived
+#    (last run 2026-09-21: 9/9 boxes, 112,585 of 1,627,560 px changed; box 7 wallCloses=false
+#     glyph=3004 structure=7584, box 8 wallCloses=false glyph=913 structure=8975)
 
 # 3. Regression page — the smooth-ellipse page the old model was tuned on. Must stay green.
 #    Source: /tmp/j4/img/working_4.jpg (a /tmp path — copy it somewhere durable if it is still there,
