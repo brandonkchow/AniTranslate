@@ -76,6 +76,44 @@ impossible** and follows any wall shape for free, with **no inset to guess**.
 
 ---
 
+## 3b. The glyph layer — classification replaces the shape (2026-09-21, `5c98b31`)
+
+**What changed.** `GlyphErase` labels the ink inside the detector's box into 8-connected components
+and splits it by **shape alone**: *structure* is ink whose longest bbox side reaches 45% of the box's
+short side (a wall, tail or spine crossing the box), ink touching the box edge, or a low-fill
+hairline at ≥25% extent (a scallop bump, an arc); *glyph* is everything else. Glyphs are erased and
+filled from the local background, and the halo dilation is **clipped to `boxMask ∧ ¬structure`** so it
+can never grow onto a wall. `BubbleInkMask.plan` runs classification **first** — the enclosed
+interior and the fitted shape are now reached only when the classifier finds nothing to act on. No
+bound-derived value is painted in preference any more, which is what the clamp was.
+
+**Why the shapes had to be demoted.** An interior — measured *or* fitted — is a shape *around* the
+text, so it clips the block's corners: a plain ellipse leaves the ends of a vertical column outside
+itself. Measured on a synthetic page with ground-truth wall/text masks, text surviving the wipe was
+**104 px on the old code and 0 px on the new** for a tight box where no interior closes, with zero
+wall ink repainted either way.
+
+**On the real focus page, the detector's own nine boxes:** box 7 went 10,482 px wiped → 7,333 **with
+7,584 px of structure now preserved** (the scalloped wall is no longer sliced); box 8 went 1,447 →
+3,819 px (**2.6×**, 8,975 px of spikes kept). `wallBefore == wallSurvived` and `visibleResidual == 0`
+on all nine.
+
+**The lesson that matters more than the fix.** The harness used to measure residuals *inside
+`plan.interior`* — the mask whose size was the bug — so it reported `visibleResidual=0
+maxDarkDeviation=0.0000`, a perfect wipe, while a wall arc and 16% of the text were destroyed. **A
+metric computed inside the artefact that produced the mistake cannot detect the mistake.** The
+residual/deviation checks are now structure-aware, the classified path asserts its contract from its
+own masks (every classified glyph erased, no classified structure painted), and anything that needs
+to *prove* a wipe must be measured against ground truth — `/tmp/g/make_page.py` + `measure.py` build
+a page whose wall and text pixels are known. Nothing about a real page can be proved by comparing
+"is it still dark", because the wipe repaints text with text.
+
+**Deliberate limitation:** ink *clipped* by the detector's box (a text column overflowing its bubble)
+is indistinguishable from a wall by shape alone and is therefore preserved. Real lettering fits
+inside its bubble; do not read a residual from an overflowing fixture as a wipe defect.
+
+---
+
 ## 4. How to verify — in this order
 
 ```bash
