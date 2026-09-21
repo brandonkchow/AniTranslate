@@ -46,6 +46,23 @@ object BubbleInkMask {
     )
 
     /**
+     * The detector's own box, and where that box sits inside the region being planned.
+     *
+     * The region can be wider than the box, because a stroke clipped by a tight box cannot close
+     * and so cannot be recognised as a wall at all. Anything that belongs to the *detector's* box —
+     * the fill colour, the fitted-shape fallback — must therefore be decided in this frame rather
+     * than the region's. A box-relative inset applied to a widened region silently produces a
+     * larger shape; that is what cost one bubble the bottom arc of its outline.
+     */
+    data class BoxFrame(
+        val left: Int,
+        val top: Int,
+        val width: Int,
+        val height: Int,
+        val inset: Int
+    )
+
+    /**
      * Decide the wipe for a single region of ARGB pixels laid out row-major.
      *
      * @param pixels the region, `width * height` ARGB values.
@@ -59,7 +76,8 @@ object BubbleInkMask {
         height: Int,
         bgColor: Int,
         shape: BubbleInterior.Shape,
-        densityScale: Float
+        densityScale: Float,
+        box: BoxFrame
     ): Plan {
         val count = width * height
         require(count > 0) { "region must not be empty" }
@@ -67,22 +85,43 @@ object BubbleInkMask {
 
         val luminance = FloatArray(count) { BubbleInterior.luminance(pixels[it]) }
 
-        // Measure the wall from the image rather than assuming a margin. No fixed margin can work:
-        // the stroke of a curved bubble passes through the *interior* of its bounding box, far from
-        // the box edge, so any margin small enough to spare the text is far too small to spare the
-        // wall.
-        val measured = BubbleInterior.measureWallInset(luminance, width, height)
-        val wallInset = if (measured > 0) {
-            measured
+        // The fitted-shape fallback is measured against the box the detector drew, never against the
+        // region this plan runs on. The caller widens the region so that a stroke clipped by a tight
+        // box can still be recognised as a wall — but an inset re-measured out there is not the same
+        // inset at all: the ray walks further before it meets the stroke, and it can meet different
+        // ink on the way in. That difference is not academic; it silently enlarged the fallback shape
+        // and ate the bottom arc off a bubble that the unwidened measurement had framed correctly.
+        val wallInset = if (box.inset > 0) {
+            box.inset
         } else {
             // No wall found — text sitting straight on artwork. Keep a scaled floor so the
             // geometric fallback below still clears its own edge cleanly.
-            max(4f * densityScale, 0.05f * min(width, height)).toInt()
+            max(4f * densityScale, 0.05f * min(box.width, box.height)).toInt()
         }
 
         // Only the interior may be modified. The stroke, the bubble tail, and whatever artwork the
         // box corners clipped all live outside this mask and are never touched.
-        val interior = BubbleInterior.interiorMask(width, height, shape, wallInset)
+        //
+        // Prefer the interior the image itself encloses: it follows a spiked or scalloped wall that
+        // a fitted ellipse slices straight through, and it cannot contain the stroke at all. When no
+        // wall closes inside the region this falls back to the fitted shape, so behaviour degrades
+        // to exactly what shipped before rather than to a guess.
+        val enclosed = EnclosedInterior.measure(luminance, width, height)
+        val interior = if (enclosed.found) {
+            enclosed.mask
+        } else {
+            // Fitted in the detector's own box and then lifted into the region. An inset is only
+            // meaningful against the box it was measured in: fitting it to the wider region scales
+            // the shape up along with the widening, and wipes straight over the stroke it exists to
+            // protect. A box-relative inset is not a region-relative one, and the difference is not
+            // the margin — the ray also stops on whatever ink it happens to meet on the way in.
+            val fitted = BubbleInterior.interiorMask(box.width, box.height, shape, wallInset)
+            BooleanArray(count) { i ->
+                val x = (i % width) - box.left
+                val y = (i / width) - box.top
+                x in 0 until box.width && y in 0 until box.height && fitted[y * box.width + x]
+            }
+        }
 
         val bgLum = BubbleInterior.luminance(bgColor)
         val isInverted = bgLum <= INVERTED_BG_LUMINANCE

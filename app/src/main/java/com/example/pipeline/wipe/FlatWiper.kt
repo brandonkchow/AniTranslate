@@ -20,6 +20,11 @@ import kotlin.math.min
  */
 object FlatWiper {
 
+    /** Bubble types whose text sits directly on artwork: there is no wall to find or protect. */
+    private val WALL_LESS_TYPES = setOf("floating", "side_text")
+
+    private fun hasWall(bubbleType: String) = bubbleType.lowercase() !in WALL_LESS_TYPES
+
     suspend fun wipeBubbles(
         sourceBitmap: Bitmap,
         bubbles: List<Bubble>
@@ -48,16 +53,58 @@ object FlatWiper {
 
             val shape = BubbleInterior.shapeFor(boxW.toFloat() / boxH.toFloat(), bubble.type)
 
-            val pixels = IntArray(boxW * boxH)
-            resultBitmap.getPixels(pixels, 0, boxW, leftPx, topPx, boxW, boxH)
-            val sampledColor = BubbleInkMask.sampleInteriorColor(pixels, boxW, boxH)
+            // Sample the fill colour from the box the detector drew, and measure the fallback inset
+            // there too: widening the region below would move these sample points out onto the
+            // artwork, and would change what the inset measurement walks past on its way in.
+            val boxPixels = IntArray(boxW * boxH)
+            resultBitmap.getPixels(boxPixels, 0, boxW, leftPx, topPx, boxW, boxH)
+            val sampledColor = BubbleInkMask.sampleInteriorColor(boxPixels, boxW, boxH)
+            val boxInset = BubbleInterior.measureWallInset(
+                FloatArray(boxW * boxH) { BubbleInterior.luminance(boxPixels[it]) },
+                boxW,
+                boxH
+            )
 
-            val plan = BubbleInkMask.plan(pixels, boxW, boxH, sampledColor, shape, densityScale)
+            // A walled bubble is measured over a margin-widened region. A detection box is tight by
+            // construction, so the stroke is frequently clipped by its own edge and can no longer be
+            // recognised as a wall that closes. The widening is for that measurement alone: the fill
+            // colour and the fallback inset above, and the box the shape fallback draws into below,
+            // all stay on the detector's own box.
+            val margin = if (hasWall(bubble.type)) {
+                EnclosedInterior.measurementMargin(boxW, boxH)
+            } else {
+                0
+            }
+            val regionLeft = (leftPx - margin).coerceAtLeast(0)
+            val regionTop = (topPx - margin).coerceAtLeast(0)
+            val regionRight = (rightPx + margin).coerceAtMost(bmpWidth)
+            val regionBottom = (bottomPx + margin).coerceAtMost(bmpHeight)
+            val regionW = regionRight - regionLeft
+            val regionH = regionBottom - regionTop
+
+            val pixels = IntArray(regionW * regionH)
+            resultBitmap.getPixels(pixels, 0, regionW, regionLeft, regionTop, regionW, regionH)
+
+            val plan = BubbleInkMask.plan(
+                pixels,
+                regionW,
+                regionH,
+                sampledColor,
+                shape,
+                densityScale,
+                BubbleInkMask.BoxFrame(
+                    left = leftPx - regionLeft,
+                    top = topPx - regionTop,
+                    width = boxW,
+                    height = boxH,
+                    inset = boxInset
+                )
+            )
 
             if (plan.usedInkMask) {
                 // Preferred: repaint only the text, leaving the wall, tail and artwork intact.
                 BubbleInkMask.apply(pixels, plan.wipe, sampledColor)
-                resultBitmap.setPixels(pixels, 0, boxW, leftPx, topPx, boxW, boxH)
+                resultBitmap.setPixels(pixels, 0, regionW, regionLeft, regionTop, regionW, regionH)
             } else {
                 // Nothing readable in there — fall back to wiping a shape.
                 paint.color = sampledColor
@@ -91,7 +138,7 @@ object FlatWiper {
         wallInset: Int,
         densityScale: Float
     ) {
-        if (bubbleType.lowercase() in setOf("floating", "side_text")) {
+        if (!hasWall(bubbleType)) {
             // Text directly over artwork: no wall to protect, so the whole region goes.
             val rectF = RectF(
                 leftPx.toFloat(),

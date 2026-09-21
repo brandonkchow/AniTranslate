@@ -2,6 +2,7 @@ package com.example
 
 import com.example.pipeline.wipe.BubbleInkMask
 import com.example.pipeline.wipe.BubbleInterior
+import com.example.pipeline.wipe.EnclosedInterior
 import java.io.File
 import javax.imageio.ImageIO
 import org.junit.Assert.assertEquals
@@ -84,15 +85,62 @@ class WiperHarnessTest {
             val boxW = right - left
             val boxH = bottom - top
 
-            // Lift the region out exactly as FlatWiper does.
-            val region = IntArray(boxW * boxH)
+            // Sample the fill colour from the detector's own box, exactly as FlatWiper does: the
+            // widened region below reaches out onto the artwork.
+            val boxPixels = IntArray(boxW * boxH)
             for (y in 0 until boxH) {
-                System.arraycopy(canvasPixels, (top + y) * width + left, region, y * boxW, boxW)
+                System.arraycopy(canvasPixels, (top + y) * width + left, boxPixels, y * boxW, boxW)
+            }
+            val sampled = BubbleInkMask.sampleInteriorColor(boxPixels, boxW, boxH)
+
+            // Widen the measurement region by the same margin FlatWiper uses, so the harness
+            // exercises the shipping path instead of a narrower one the phone never runs.
+            val margin = if (box.type.lowercase() in setOf("floating", "side_text")) {
+                0
+            } else {
+                EnclosedInterior.measurementMargin(boxW, boxH)
+            }
+            val regionLeft = (left - margin).coerceAtLeast(0)
+            val regionTop = (top - margin).coerceAtLeast(0)
+            val regionRight = (right + margin).coerceAtMost(width)
+            val regionBottom = (bottom + margin).coerceAtMost(height)
+            val regionW = regionRight - regionLeft
+            val regionH = regionBottom - regionTop
+
+            val region = IntArray(regionW * regionH)
+            for (y in 0 until regionH) {
+                System.arraycopy(
+                    canvasPixels,
+                    (regionTop + y) * width + regionLeft,
+                    region,
+                    y * regionW,
+                    regionW
+                )
             }
 
             val shape = BubbleInterior.shapeFor(boxW.toFloat() / boxH.toFloat(), box.type)
-            val sampled = BubbleInkMask.sampleInteriorColor(region, boxW, boxH)
-            val plan = BubbleInkMask.plan(region, boxW, boxH, sampled, shape, densityScale)
+            // Measured on the detector's own box, exactly as FlatWiper does — the widened region
+            // would give a different inset, which is what silently enlarged the fallback shape.
+            val boxInset = BubbleInterior.measureWallInset(
+                FloatArray(boxW * boxH) { BubbleInterior.luminance(boxPixels[it]) },
+                boxW,
+                boxH
+            )
+            val plan = BubbleInkMask.plan(
+                region,
+                regionW,
+                regionH,
+                sampled,
+                shape,
+                densityScale,
+                BubbleInkMask.BoxFrame(
+                    left = left - regionLeft,
+                    top = top - regionTop,
+                    width = boxW,
+                    height = boxH,
+                    inset = boxInset
+                )
+            )
 
             val before = region.copyOf()
             if (plan.usedInkMask) {
@@ -106,7 +154,7 @@ class WiperHarnessTest {
             var visibleResidual = 0
             var maxDarkDeviation = 0f
 
-            for (i in 0 until boxW * boxH) {
+            for (i in 0 until regionW * regionH) {
                 val lumBefore = BubbleInterior.luminance(before[i])
                 if (lumBefore < bgLum - BubbleInkMask.INK_TOLERANCE && !plan.interior[i]) {
                     // A dark pixel outside the interior is wall, tail or artwork: all must survive.
@@ -125,16 +173,41 @@ class WiperHarnessTest {
                 }
             }
 
+            // Did the image actually enclose an interior here? This decides whether the measured
+            // geometry was used, or the fitted shape fell back into play.
+            val enclosedBefore = EnclosedInterior.measure(
+                FloatArray(regionW * regionH) { BubbleInterior.luminance(before[it]) },
+                regionW,
+                regionH
+            )
+
             println(
-                "[harness] box $index ${boxW}x$boxH type=${box.type} shape=$shape " +
-                    "wallInset=${plan.wallInset} inkMask=${plan.usedInkMask} " +
-                    "wiped=${plan.wipe.count { it }} wallBefore=$wallBefore " +
+                "[harness] box $index ${regionW}x$regionH margin=$margin type=${box.type} " +
+                    "shape=$shape wallInset=${plan.wallInset} inkMask=${plan.usedInkMask} " +
+                    "wallCloses=${enclosedBefore.found} wiped=${plan.wipe.count { it }} wallBefore=$wallBefore " +
                     "wallSurvived=$wallSurvived visibleResidual=$visibleResidual " +
                     "maxDarkDeviation=${"%.4f".format(maxDarkDeviation)}" +
                     " (${"%.1f".format(maxDarkDeviation * 255)}/255)"
             )
 
             if (plan.usedInkMask) {
+                // The regression this change exists to prevent. A mask that is too large counts the
+                // wall as interior in the counts above, so the harness stays green while the
+                // artwork is destroyed — which is exactly how the last on-device run passed on the
+                // laptop and failed on the page. Measure it from the image instead: if the stroke
+                // was eaten, the paper inside now reaches the page and the interior stops closing.
+                if (enclosedBefore.found) {
+                    val enclosedAfter = EnclosedInterior.measure(
+                        FloatArray(regionW * regionH) { BubbleInterior.luminance(region[it]) },
+                        regionW,
+                        regionH
+                    )
+                    assertTrue(
+                        "box $index: the wipe broke the bubble wall — the interior no longer closes",
+                        enclosedAfter.found
+                    )
+                }
+
                 // The regression: every wall pixel used to be repainted as interior.
                 assertTrue(
                     "box $index: found no wall to preserve — is this really a bubble?",
@@ -158,8 +231,14 @@ class WiperHarnessTest {
             }
 
             // Write the region back so the harness output is a real image.
-            for (y in 0 until boxH) {
-                System.arraycopy(region, y * boxW, canvasPixels, (top + y) * width + left, boxW)
+            for (y in 0 until regionH) {
+                System.arraycopy(
+                    region,
+                    y * regionW,
+                    canvasPixels,
+                    (regionTop + y) * width + regionLeft,
+                    regionW
+                )
             }
         }
 
