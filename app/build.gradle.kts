@@ -78,6 +78,20 @@ secrets {
 
 googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.WARN }
 
+// Desktop harness wiring. Gradle project properties (`-Pharness.page=...`) are the only settings
+// that reliably reach a forked test JVM — environment variables depend on how the Gradle daemon
+// happened to be started, which is not something the caller can see or control. Forward them onto
+// the test workers so the wiper can be exercised against a real page on a development machine.
+tasks.withType<Test>().configureEach {
+  val harnessPage = providers.gradleProperty("harness.page").orNull
+  if (harnessPage != null) {
+    systemProperty("harness.page", harnessPage)
+    providers.gradleProperty("harness.boxes").orNull?.let { systemProperty("harness.boxes", it) }
+    providers.gradleProperty("harness.out").orNull?.let { systemProperty("harness.out", it) }
+    testLogging { showStandardStreams = true }
+  }
+}
+
 // Some unused dependencies are commented out below instead of being removed.
 // This makes it easy to add them back in the future if needed.
 dependencies {

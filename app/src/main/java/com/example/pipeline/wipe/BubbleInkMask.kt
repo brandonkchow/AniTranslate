@@ -1,0 +1,201 @@
+package com.example.pipeline.wipe
+
+import kotlin.math.max
+import kotlin.math.min
+
+/**
+ * The wipe decision, with no Android types involved.
+ *
+ * This is deliberately pure so the *same* code that runs on the phone can be exercised on a
+ * development machine against real pages. Android's `Bitmap` only ever hands it an `IntArray` of
+ * ARGB pixels, so a desktop harness can load a JPEG with `ImageIO`, call straight into here, and
+ * be testing the shipped logic rather than a reimplementation of it.
+ */
+object BubbleInkMask {
+
+    /**
+     * How far a pixel must sit from the interior colour before it counts as content.
+     *
+     * Set just above the visibility floor: a 0.02 deviation is 5/255, which on white is
+     * indistinguishable from white. A looser value buys no safety — the bubble wall is protected
+     * by the interior mask, not by this threshold — it only leaves the JPEG ringing around every
+     * erased glyph behind as speckle inside the bubble.
+     */
+    const val INK_TOLERANCE = 0.02f
+
+    /** Below this, there is no text worth masking and the caller should use a shape wipe. */
+    private const val MIN_TEXT_PIXELS = 10
+
+    /** Luminance at or below which a sampled interior is treated as a dark (inverted) bubble. */
+    private const val INVERTED_BG_LUMINANCE = 0.40f
+
+    /**
+     * What the wiper should do with one region.
+     *
+     * @param wallInset measured distance from the region edge to the inside of the stroke.
+     * @param interior pixels the wiper is allowed to touch at all.
+     * @param wipe pixels to repaint with the sampled interior colour.
+     * @param usedInkMask false when no text was found, in which case `wipe` is empty and the
+     *   caller should fall back to wiping a shape.
+     */
+    data class Plan(
+        val wallInset: Int,
+        val interior: BooleanArray,
+        val wipe: BooleanArray,
+        val usedInkMask: Boolean
+    )
+
+    /**
+     * Decide the wipe for a single region of ARGB pixels laid out row-major.
+     *
+     * @param pixels the region, `width * height` ARGB values.
+     * @param bgColor the sampled interior colour, used as both the ink reference and the fill.
+     * @param shape the interior shape chosen for this region.
+     * @param densityScale scales kernel sizes with image resolution.
+     */
+    fun plan(
+        pixels: IntArray,
+        width: Int,
+        height: Int,
+        bgColor: Int,
+        shape: BubbleInterior.Shape,
+        densityScale: Float
+    ): Plan {
+        val count = width * height
+        require(count > 0) { "region must not be empty" }
+        require(pixels.size >= count) { "need $count pixels, got ${pixels.size}" }
+
+        val luminance = FloatArray(count) { BubbleInterior.luminance(pixels[it]) }
+
+        // Measure the wall from the image rather than assuming a margin. No fixed margin can work:
+        // the stroke of a curved bubble passes through the *interior* of its bounding box, far from
+        // the box edge, so any margin small enough to spare the text is far too small to spare the
+        // wall.
+        val measured = BubbleInterior.measureWallInset(luminance, width, height)
+        val wallInset = if (measured > 0) {
+            measured
+        } else {
+            // No wall found — text sitting straight on artwork. Keep a scaled floor so the
+            // geometric fallback below still clears its own edge cleanly.
+            max(4f * densityScale, 0.05f * min(width, height)).toInt()
+        }
+
+        // Only the interior may be modified. The stroke, the bubble tail, and whatever artwork the
+        // box corners clipped all live outside this mask and are never touched.
+        val interior = BubbleInterior.interiorMask(width, height, shape, wallInset)
+
+        val bgLum = BubbleInterior.luminance(bgColor)
+        val isInverted = bgLum <= INVERTED_BG_LUMINANCE
+
+        val ink = BooleanArray(count)
+        var inkCount = 0
+        for (i in 0 until count) {
+            if (!interior[i]) continue
+            val lum = luminance[i]
+            val isInk = if (isInverted) {
+                lum > bgLum + INK_TOLERANCE
+            } else {
+                lum < bgLum - INK_TOLERANCE
+            }
+            if (isInk) {
+                ink[i] = true
+                inkCount++
+            }
+        }
+
+        if (inkCount < MIN_TEXT_PIXELS) {
+            return Plan(wallInset, interior, BooleanArray(count), false)
+        }
+
+        // Grow the ink by 1-2px to absorb anti-aliasing and furigana. Growth is bounded by the
+        // interior mask so it can never bleed onto the wall.
+        val radius = (1.5f * densityScale).toInt().coerceIn(1, 3)
+        return Plan(wallInset, interior, dilate(ink, interior, width, height, radius), true)
+    }
+
+    /** Repaint every set pixel of [mask] with [fillColor]. */
+    fun apply(pixels: IntArray, mask: BooleanArray, fillColor: Int) {
+        for (i in mask.indices) {
+            if (mask[i]) pixels[i] = fillColor
+        }
+    }
+
+    /**
+     * The flat colour of the region's interior, used as both the ink reference and the repaint
+     * fill. Sampled 12% in from the edges so the stroke is never picked up, and limited to bright
+     * pixels so the text is never picked up either.
+     */
+    fun sampleInteriorColor(
+        pixels: IntArray,
+        width: Int,
+        height: Int,
+        fallback: Int = 0xFFFFFFFF.toInt()
+    ): Int {
+        if (width <= 0 || height <= 0) return fallback
+
+        val insetX = ((width) * 0.12f).toInt().coerceAtLeast(2)
+        val insetY = ((height) * 0.12f).toInt().coerceAtLeast(2)
+
+        val samples = listOf(
+            insetX to insetY,
+            (width - insetX) to insetY,
+            insetX to (height - insetY),
+            (width - insetX) to (height - insetY),
+            insetX to (height / 2),
+            (width - insetX) to (height / 2)
+        )
+
+        val rValues = ArrayList<Int>(samples.size)
+        val gValues = ArrayList<Int>(samples.size)
+        val bValues = ArrayList<Int>(samples.size)
+
+        for ((x, y) in samples) {
+            val cx = x.coerceIn(0, width - 1)
+            val cy = y.coerceIn(0, height - 1)
+            val pixel = pixels[cy * width + cx]
+            if (BubbleInterior.luminance(pixel) >= 0.65f) {
+                rValues.add((pixel shr 16) and 0xFF)
+                gValues.add((pixel shr 8) and 0xFF)
+                bValues.add(pixel and 0xFF)
+            }
+        }
+
+        if (rValues.isEmpty()) return fallback
+
+        rValues.sort()
+        gValues.sort()
+        bValues.sort()
+        val mid = rValues.size / 2
+        return (0xFF shl 24) or (rValues[mid] shl 16) or (gValues[mid] shl 8) or bValues[mid]
+    }
+
+    /** Square-kernel dilation of [seed], clipped to [bounds]. */
+    fun dilate(
+        seed: BooleanArray,
+        bounds: BooleanArray,
+        width: Int,
+        height: Int,
+        radius: Int
+    ): BooleanArray {
+        val out = BooleanArray(seed.size)
+        if (radius <= 0) return seed.copyOf()
+        for (y in 0 until height) {
+            val rowOffset = y * width
+            val y0 = (y - radius).coerceAtLeast(0)
+            val y1 = (y + radius).coerceAtMost(height - 1)
+            for (x in 0 until width) {
+                if (!seed[rowOffset + x]) continue
+                val x0 = (x - radius).coerceAtLeast(0)
+                val x1 = (x + radius).coerceAtMost(width - 1)
+                for (ny in y0..y1) {
+                    val nRow = ny * width
+                    for (nx in x0..x1) {
+                        val nIdx = nRow + nx
+                        if (bounds[nIdx]) out[nIdx] = true
+                    }
+                }
+            }
+        }
+        return out
+    }
+}
