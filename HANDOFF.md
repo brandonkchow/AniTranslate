@@ -28,25 +28,17 @@ yourself. He has explicitly said driving the emulator UI by hand wastes tokens
 
 ## 2. Where things stand right now
 
-- Repo: `/home/bchow/projects/AniTranslate`, branch `main`, **pushed HEAD `c2a9512`**, remote tree clean.
-- **The working tree is DIRTY and uncommitted.** It holds the complete, measured-interior fix plus
-  two regression fixes — see §3.
-- The fix is **verified on the PC harness** (94/94 tests green, zero regression — §4) but
-  **NOT committed, NOT pushed, and NOT shipped to the phone.** The phone still runs the old build.
-- Coverage: on the focus page, **6 of 9 bubbles** now get a measured interior; **3 fall back** and are
-  byte-identical to the shipped build (0 px changed).
-
-**Your first action is to review that diff and commit it** — it is finished work that is currently
-one `git checkout` away from being lost:
-
-```bash
-cd ~/projects/AniTranslate
-git status --short
-git diff --stat                     # EnclosedInterior.kt is untracked — read it in full
-git diff -- app/src/main/java/com/example/pipeline/wipe/
-```
-
-Do not sweep unrelated config drift into that commit.
+- Repo: `/home/bchow/projects/AniTranslate`, branch `main`. The measured-interior fix (§3), the
+  glyph layer (§3b) and the text anchoring plus unread invariant (§3c) are all committed and pushed.
+- **PC suite: 111/0/0/1** — 8 of those are the anchoring regression, locked to the real page's own
+  detection output (§3c). The single skip is the harness exercising itself; the step-3 regression
+  fixture is still lost, which is an open coverage gap, not a pass.
+- **Installed on the phone:** the Step A debug build (`adb install -r`, app data intact).
+- **Owed:** a fresh on-device run of the real page on that build — the anchored bubble should now be
+  translated in place with no phantom region in the gutter, and the never-read bubble reported as
+  `DETECT_UNREAD` with its artwork left alone. **Step B (manga-ocr ONNX on-device) is what covers
+  that second case**; until it ships, an unread region is reported loudly and left in Japanese
+  rather than wiped blank.
 
 ---
 
@@ -114,6 +106,39 @@ inside its bubble; do not read a residual from an overflowing fixture as a wipe 
 
 ---
 
+## 3c. Anchoring — the drop that was silent (2026-09-23, Step A)
+
+Detection was never the failing stage; **content reading was**. On the real page the detector found
+**9** bubbles and **9** text regions, the reading slot returned **8** boxes, the merge matched **7**,
+and two bubbles' text was lost — logged as "left untouched (no text inside)", which was a **false
+negative**: both bubbles contain a detected text region. Measured on that page (1080x1507):
+
+| bubble | score | box | its text region | what happened |
+| --- | --- | --- | --- | --- |
+| A | 0.925 | x5.9–29.3% y80.9–96.8% | 0.917, inside it | read correctly, but the box came back ~42 px right: its centre landed in the gutter, so the text never matched, and the orphan box was typeset into empty artwork as a `floating` region |
+| B | 0.849 | x31.5–49.8% y61.9–74.6% | 0.735, inside it | never read at all — no box came back for it |
+
+Both bubbles' Japanese was **byte-identical in the wiped and the final image** (14,375 px and 5,929 px
+of ink) — untouched, not damaged, and silently so.
+
+**The fix is `BubbleTextAnchor`** (`detect/BubbleTextAnchor.kt`), a pure pre-pass run in
+`PagePipeline` before matching:
+
+- a box that matches no bubble is **snapped onto the text region of a bubble that has no text yet**,
+  when one lies within 5% of the page diagonal (92.7 px here). It then matches normally: the text
+  lands on its own bubble and the phantom floating region disappears, because the box is no longer
+  orphaned;
+- **only unfilled bubbles are anchor targets**, so a snap can never duplicate text onto a bubble that
+  was read correctly. That is what makes the choice structural rather than a distance coin-flip: the
+  correct target was 42.4 px away, and a correctly-read neighbour's text was 75.1 px away — so
+  nearest-wins alone would have hung on a 1.8x margin;
+- text the reading slot never returned is reported as **`DETECT_UNREAD`** in the run log (regions and
+  scores) and its artwork is left untouched rather than wiped blank. It is no longer silent.
+
+`BubbleTextAnchorTest` locks this to the real page's complete detection set (9 + 9 regions, 8 entries,
+boxes exactly as the run recorded them), and includes the pre-fix state as its own test so the
+invariant is proven to fire.
+
 ## 4. How to verify — in this order
 
 ```bash
@@ -121,7 +146,8 @@ cd ~/projects/AniTranslate
 
 # 1. Full JVM suite (the harness skips itself unless -Pharness.page is passed, so CI is untouched).
 ./gradlew testDebugUnitTest --rerun-tasks --console=plain
-#    expect: 103 tests, 0 failures, 0 errors, 1 skipped
+#    expect: 111 tests, 0 failures, 0 errors, 1 skipped
+#    (8 of them are BubbleTextAnchorTest — the dropped-bubble regression, §3c)
 #    The 1 skip IS WiperHarnessTest, self-skipping by design — run step 2 to exercise it.
 #    Count from app/build/test-results/testDebugUnitTest/*.xml, never from the build banner:
 #    "BUILD SUCCESSFUL" is also what you get when the tests were up-to-date and never ran.
@@ -228,7 +254,10 @@ actually care about.
 
 ## 6. What is actually left
 
-1. **Commit and push the uncommitted fix** (§2), after a review you are satisfied with.
+1. **Step A is in** (§3c): anchoring plus the `DETECT_UNREAD` invariant, PC suite 111/0/0/1, installed
+   on the phone. What is left is **Step B — manga-ocr ONNX on-device**, so that *every* detected text
+   region is read locally and bubble B's case is covered instead of merely reported. Until it ships,
+   unread regions stay loud and untouched.
 2. **Close the guard gap — highest value.** The over-wipe invariant is **skipped when no wall closes**,
    which is exactly the case that broke twice. An invariant that only runs in the case that already
    works is not a guard. Make the fallback path assert something too (e.g. the fitted shape must not

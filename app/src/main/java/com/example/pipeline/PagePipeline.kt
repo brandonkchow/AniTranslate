@@ -9,6 +9,7 @@ import com.example.data.slots.ApiSlot
 import com.example.net.ApiException
 import com.example.net.GeminiClient
 import com.example.net.OpenAiCompatibleClient
+import com.example.pipeline.detect.BubbleTextAnchor
 import com.example.pipeline.detect.BubbleTextMerger
 import com.example.pipeline.detect.DetectedRegion
 import com.example.pipeline.detect.DetectorPostProcess
@@ -229,9 +230,19 @@ class PagePipeline(
                 val vlmEntries = bubbles.map {
                     BubbleTextMerger.VlmEntry(text = it.text, box = it.box, vertical = it.vertical)
                 }
-                val merged = BubbleTextMerger.merge(
+                // Snap misplaced vision boxes onto detector text geometry *before* matching. A box
+                // that missed its bubble by a few dozen pixels otherwise loses its text to
+                // centre-containment and is typeset as a floating region in empty artwork.
+                val anchored = BubbleTextAnchor.snapOrphans(
                     bubbles = detectorBubbles,
                     vlm = vlmEntries,
+                    textBubbles = detectorTextBubbles,
+                    srcWidth = workingBmp.width,
+                    srcHeight = workingBmp.height
+                )
+                val merged = BubbleTextMerger.merge(
+                    bubbles = detectorBubbles,
+                    vlm = anchored.entries,
                     textBubbles = detectorTextBubbles,
                     floating = detectorFloating,
                     srcWidth = workingBmp.width,
@@ -255,7 +266,8 @@ class PagePipeline(
                         context, currentPage.jobId, currentPage.pageIndex, "DETECT_MERGE",
                         "Replaced $visionBoxCount vision box(es) with detector geometry: " +
                             "$placedFromDetector bubble(s) matched text, " +
-                            "${detectorBubbles.size - placedFromDetector} left untouched (no text inside), " +
+                            "${detectorBubbles.size - placedFromDetector} untouched " +
+                            "(${anchored.unread.size} region(s) of them hold detected text — see DETECT_UNREAD), " +
                             "${merged.count { it.vertical }} of ${merged.size} oriented vertical."
                     )
                 } else {
@@ -264,6 +276,29 @@ class PagePipeline(
                     RunLogger.logPageEvent(
                         context, currentPage.jobId, currentPage.pageIndex, "DETECT_MERGE",
                         "Detector found ${detectorBubbles.size} bubble(s) but no vision text fell inside any of them — keeping vision geometry."
+                    )
+                }
+
+                if (anchored.snappedCount > 0) {
+                    RunLogger.logPageEvent(
+                        context, currentPage.jobId, currentPage.pageIndex, "DETECT_ANCHOR",
+                        "Re-anchored ${anchored.snappedCount} vision box(es) that missed their bubble " +
+                            "onto detector text geometry (max gap ${(BubbleTextAnchor.MAX_ANCHOR_GAP_FRACTION * 100).toInt()}% of page diagonal)."
+                    )
+                }
+
+                if (anchored.unread.isNotEmpty()) {
+                    // The detector measured text here and the reading slot returned none for it.
+                    // Never silent: name the regions, and leave the artwork untouched — an
+                    // untouched bubble beats one wiped blank with nothing to typeset into it.
+                    RunLogger.logPageEvent(
+                        context, currentPage.jobId, currentPage.pageIndex, "DETECT_UNREAD",
+                        "${anchored.unread.size} detected text region(s) have no readable text — " +
+                            "left untouched, not wiped: " + anchored.unread.joinToString(", ") { region ->
+                            "x${(region.box[0] * 100).toInt()}..${(region.box[2] * 100).toInt()}%" +
+                                " y${(region.box[1] * 100).toInt()}..${(region.box[3] * 100).toInt()}%" +
+                                " (score ${String.format(java.util.Locale.US, "%.2f", region.score)})"
+                        }
                     )
                 }
             }
