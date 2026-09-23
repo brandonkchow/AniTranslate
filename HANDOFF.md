@@ -34,11 +34,32 @@ yourself. He has explicitly said driving the emulator UI by hand wastes tokens
   detection output (§3c). The single skip is the harness exercising itself; the step-3 regression
   fixture is still lost, which is an open coverage gap, not a pass.
 - **Installed on the phone:** the Step A debug build (`adb install -r`, app data intact).
-- **Owed:** a fresh on-device run of the real page on that build — the anchored bubble should now be
-  translated in place with no phantom region in the gutter, and the never-read bubble reported as
-  `DETECT_UNREAD` with its artwork left alone. **Step B (manga-ocr ONNX on-device) is what covers
-  that second case**; until it ships, an unread region is reported loudly and left in Japanese
-  rather than wiped blank.
+- **Verified on the device — three real pages, 2026-09-23.** The Step A build ran the focus page plus
+  two others. Anchoring fired on all three and the coverage report is honest:
+
+  | run | detector found | re-anchored | reported unread (`DETECT_UNREAD`) |
+  | --- | --- | --- | --- |
+  | focus page (job_10) | 9 bubbles | **1** | 1 — x38..47% y63..72% (score 0.75) |
+  | FANZA page (job_11) | 4 bubbles | **3** | 0 |
+  | ちんすこう page (job_12) | 10 bubbles | **2** | 1 — x2..12% y72..86% (score 0.91) |
+
+  Same-page A/B against the pre-fix build (job_9; `orig_9.png` md5 == `orig_10.png` md5), counting
+  changed pixels **inside the boxes the defect names**:
+
+  | region on the focus page | pre-fix | post-fix |
+  | --- | --- | --- |
+  | the dropped bubble's interior | **0** changed | **15,011** changed |
+  | its text region (the erased ink) | 0 | **13,984** |
+  | the gutter where its translation was mis-typeset | **17,364** | **38** |
+  | the never-read bubble's text region | 0 | 0 — reported, left in Japanese |
+
+  So the bubble the reader *mis-placed* is now translated in its own bubble, the phantom region is
+  gone, and the bubble the reader *skipped* is untouched **and named in the log**. Across the three
+  pages 21 of 23 bubbles carry text; the 2 that do not are exactly the ones `DETECT_UNREAD` lists.
+  Every re-anchored bubble's text was inspected for mis-assignment — each reads its own dialogue, and
+  the 13 regions left `floating` on the FANZA page are SFX and credits, not dialogue.
+- **Owed:** **Step B — manga-ocr ONNX on-device** — is what covers those two bubbles. Until it ships,
+  an unread region is reported loudly and left in Japanese rather than wiped blank.
 
 ---
 
@@ -254,10 +275,10 @@ actually care about.
 
 ## 6. What is actually left
 
-1. **Step A is in** (§3c): anchoring plus the `DETECT_UNREAD` invariant, PC suite 111/0/0/1, installed
-   on the phone. What is left is **Step B — manga-ocr ONNX on-device**, so that *every* detected text
-   region is read locally and bubble B's case is covered instead of merely reported. Until it ships,
-   unread regions stay loud and untouched.
+1. **Step A is in** (§3c): anchoring plus the `DETECT_UNREAD` invariant, PC suite 111/0/0/1, and
+   verified on three real pages on the phone (§2). What is left is **Step B — manga-ocr ONNX
+   on-device**, so that *every* detected text region is read locally and a skipped bubble is covered
+   instead of merely reported. Until it ships, unread regions stay loud and untouched.
 2. **Close the guard gap — highest value.** The over-wipe invariant is **skipped when no wall closes**,
    which is exactly the case that broke twice. An invariant that only runs in the case that already
    works is not a guard. Make the fallback path assert something too (e.g. the fitted shape must not
