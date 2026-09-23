@@ -164,6 +164,43 @@ object BubbleInkMask {
         if (boxInk.count >= MIN_TEXT_PIXELS) {
             val glyph = GlyphErase.wipe(boxInk.mask, boxMask, width, height, box, radius)
             if (glyph.glyphPixels >= MIN_TEXT_PIXELS) {
+                // A component verdict is all-or-nothing, so it has to be conservative about any
+                // blob it cannot split: Japanese that leans on the stroke is one 8-connected blob
+                // with the wall, the blob is structure, and the lettering rides along with the wall
+                // that has to be kept. That is a bubble wiped white on the left and still Japanese
+                // on the right, with every count in this file agreeing the wipe came out clean.
+                //
+                // Topology splits what connectivity cannot. The wall is contiguous with the page,
+                // so the paper it encloses cannot contain it — ink inside that enclosure, inside
+                // the detector's box, is text by construction. Promoting it can therefore only add
+                // lettering, never a stroke: the wall is not in the mask being promoted from, it
+                // keeps the protection it already had, and the halo below still stops at it.
+                val enclosed = EnclosedInterior.measure(luminance, width, height)
+                if (enclosed.found) {
+                    val inside = inkWithin(luminance, enclosed.mask, bgLum, isInverted)
+                    val extra = (0 until count).count { i ->
+                        inside.mask[i] && boxMask[i] && !glyph.glyph[i]
+                    }
+                    if (extra > 0) {
+                        val glyphMask = BooleanArray(count) { i ->
+                            glyph.glyph[i] || (inside.mask[i] && boxMask[i])
+                        }
+                        val structureMask = BooleanArray(count) { i ->
+                            glyph.structure[i] && !inside.mask[i]
+                        }
+                        val bounds = BooleanArray(count) { i -> boxMask[i] && !structureMask[i] }
+                        return Plan(
+                            wallInset = wallInset,
+                            interior = boxMask,
+                            wipe = dilate(glyphMask, bounds, width, height, radius),
+                            usedInkMask = true,
+                            glyphPixels = glyphMask.count { it },
+                            structurePixels = structureMask.count { it },
+                            glyph = glyphMask,
+                            structure = structureMask
+                        )
+                    }
+                }
                 return Plan(
                     wallInset = wallInset,
                     interior = boxMask,

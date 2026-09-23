@@ -76,6 +76,10 @@ class WiperHarnessTest {
         val densityScale = maxOf(1.0f, maxOf(width, height) / 1000f)
         println("[harness] page ${width}x$height, densityScale=$densityScale")
 
+        // One box failing must not hide the other nine: collect them and report the lot after the
+        // image is written, so a failing run still leaves an artifact to look at.
+        val leftoverCensus = mutableListOf<String>()
+
         for ((index, box) in parseBoxes(boxesSpec!!).withIndex()) {
             val left = (box.x1 * width).toInt().coerceIn(0, width - 1)
             val top = (box.y1 * height).toInt().coerceIn(0, height - 1)
@@ -185,12 +189,30 @@ class WiperHarnessTest {
                 regionH
             )
 
+            // What the image says had to be gone, independent of anything the classifier decided.
+            // The masks above cannot see this defect: a component verdict that fused the lettering
+            // to the stroke calls the blob structure, and structure is exempt from the residual
+            // count by design. So measure it from the wall's own enclosure instead — if the stroke
+            // really closes around paper, every dark pixel that paper enclosed was text, and after
+            // the wipe it is either gone or it is Japanese left in a bubble (0.5f is well below the
+            // the 0.55f paper threshold, so anti-aliased edges beside a stroke never count).
+            var enclosedLeftover = 0
+            if (enclosedBefore.found) {
+                for (i in 0 until regionW * regionH) {
+                    if (!enclosedBefore.mask[i]) continue
+                    if (BubbleInterior.luminance(before[i]) >= 0.5f) continue
+                    if (BubbleInterior.luminance(region[i]) >= 0.5f) continue
+                    enclosedLeftover++
+                }
+            }
+
             println(
                 "[harness] box $index ${regionW}x$regionH margin=$margin type=${box.type} " +
                     "shape=$shape wallInset=${plan.wallInset} inkMask=${plan.usedInkMask} " +
                     "wallCloses=${enclosedBefore.found} wiped=${plan.wipe.count { it }} " +
                     "glyph=${plan.glyphPixels} structure=${plan.structurePixels} wallBefore=$wallBefore " +
                     "wallSurvived=$wallSurvived visibleResidual=$visibleResidual " +
+                    "enclosedLeftover=$enclosedLeftover " +
                     "maxDarkDeviation=${"%.4f".format(maxDarkDeviation)}" +
                     " (${"%.1f".format(maxDarkDeviation * 255)}/255)"
             )
@@ -244,6 +266,9 @@ class WiperHarnessTest {
                     0,
                     visibleResidual
                 )
+                if (enclosedBefore.found && enclosedLeftover > 0) {
+                    leftoverCensus += "box $index=$enclosedLeftover"
+                }
                 assertTrue(
                     "box $index: leftover interior pixel at ${"%.1f".format(maxDarkDeviation * 255)}/255 " +
                         "off the repaint colour — that is visible dirt",
@@ -274,5 +299,14 @@ class WiperHarnessTest {
             ImageIO.write(output, "png", file)
             println("[harness] wrote $outPath")
         }
+
+        assertTrue(
+            "Japanese left inside a wall that closes (dark px): " +
+                leftoverCensus.joinToString(", ") +
+                " — every box the detector calls text has to come out clean, not only the ones " +
+                "whose lettering happened to stand clear of the stroke",
+            leftoverCensus.isEmpty()
+        )
+
     }
 }
