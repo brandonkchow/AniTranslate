@@ -29,10 +29,17 @@ yourself. He has explicitly said driving the emulator UI by hand wastes tokens
 ## 2. Where things stand right now
 
 - Repo: `/home/bchow/projects/AniTranslate`, branch `main`. The measured-interior fix (§3), the
-  glyph layer (§3b) and the text anchoring plus unread invariant (§3c) are all committed and pushed.
-- **PC suite: 111/0/0/1** — 8 of those are the anchoring regression, locked to the real page's own
-  detection output (§3c). The single skip is the harness exercising itself; the step-3 regression
-  fixture is still lost, which is an open coverage gap, not a pass.
+  glyph layer (§3b), the text anchoring plus unread invariant (§3c) and the half-wipe repair
+  (§3d, `3797c94`) are all committed and pushed.
+- **PC suite: 114/0/0/1** — 8 of those are the anchoring regression, locked to the real page's own
+  detection output (§3c), and 3 are the fused wall+lettering repair (§3d). The single skip is the
+  harness exercising itself; the step-3 regression fixture is still lost, which is an open coverage
+  gap, not a pass.
+- **The half-wipe is fixed and measured (§3d).** On the focus page **4 of 9** boxes were leaving
+  Japanese ink inside a *closed* wall — 7,091 dark px, of which the reported bubble's 2,441 was the
+  largest instance rather than the only one — which is what put the English over unerased Japanese.
+  All 9 now report `enclosedLeftover=0` with every wall intact, and the two fallback boxes are
+  untouched to the byte.
 - **Installed on the phone:** the Step A debug build (`adb install -r`, app data intact).
 - **Verified on the device — three real pages, 2026-09-23.** The Step A build ran the focus page plus
   two others. Anchoring fired on all three and the coverage report is honest:
@@ -160,6 +167,71 @@ of ink) — untouched, not damaged, and silently so.
 boxes exactly as the run recorded them), and includes the pre-fix state as its own test so the
 invariant is proven to fire.
 
+## 3d. The half-wipe — a wall and its lettering are one blob (2026-09-23, `3797c94`)
+
+**The observation that opened it:** a bubble came back *cleaned on one side and still Japanese on the
+other*, with the translated English sitting over the Japanese that was left — "floating English where
+it shouldn't be". No count in this repo called it wrong: `visibleResidual=0` and `wallSurvived ==
+wallBefore` were both true, because the wipe had done exactly what it was told.
+
+**Why one blob.** `BubbleInkMask.INK_TOLERANCE` is `0.02f`, so *any* pixel darker than 0.98 counts as
+ink — including the faint anti-aliased grey along a stroke, which is what lettering leaning on a wall
+is made of. The classifier therefore sees wall + lettering as **one 8-connected component**, and its
+verdict is per component and all-or-nothing: the component spans the box (`extent >= 0.45 x
+shortSide`) so it is **structure**, and the lettering is kept along with the wall it touches. Columns
+that stand clear of the wall are their own components and erase normally — which is why the failure
+looked arbitrary, and why only some bubbles do it. Measured on the focus page: at threshold **t<80**
+the fused blob splits into **50** components, so the bridge is mid-grey pixels, not solid contact.
+
+**Why the enclosure separates them.** `EnclosedInterior` measures the paper the wall surrounds and its
+paper threshold is **0.55** — the very grey pixels the ink test calls ink, it calls paper. The wall is
+contiguous with the page, so it can never be *inside* its own enclosure, and ink inside that enclosure
+is text by construction. That disagreement is the repair.
+
+**What changed.** In the classification branch of `plan()`: measure the enclosure, take `inkWithin` of
+it, promote what falls inside the detector's box from structure to glyph, then re-dilate within the
+same box. Promotion can only *add* lettering — the mask it promotes from cannot contain a wall — and
+the halo still stops at the wall, because a wall pixel is still not eligible under the bounds. Every
+other path is untouched: no closing wall, nothing promoted, or the fallback, and `plan()` returns
+exactly what it returned before.
+
+**Evidence, and the loop it closed.** The harness was given an invariant **measured from the image
+rather than from the classifier** — the classifier's own verdict is the thing that was wrong, so a
+check derived from it could never fail: *dark ink inside a wall that closes must be gone.* With the
+documented step-2 command:
+
+| box | wall closes | leftover ink, pre-fix | post-fix |
+| --- | --- | --- | --- |
+| 0 | yes | 0 | 0 |
+| 1 | yes | 0 | 0 |
+| 2 | yes | **1,349** | 0 |
+| 3 | yes | 0 | 0 |
+| 4 | yes | **2,441** | 0 |
+| 5 | yes | **1,463** | 0 |
+| 6 | yes | **1,838** | 0 |
+| 7 | no | 0 (fallback) | 0 |
+| 8 | no | 0 (fallback) | 0 |
+
+7,091 dark px of Japanese left in bubbles whose wall closes, in **4 of the 9** — the bubble in the
+report is only the largest instance, not the only one. `changed` moves 112,585 -> 147,651 px of
+1,627,560 (the 7,091 plus their halos); every box keeps `wallBefore == wallSurvived`; boxes 7 and 8
+report **byte-identical** `glyph`/`structure` counts to the pre-fix build, which is the proof that the
+fallback path was not touched — and why §6 item 3 stays open. The pre-fix arm reproduces the
+`112,585` already recorded in §4, which is the anchor saying the same page and the same path are being
+measured.
+
+Two more things the harness learned: **a failing box no longer hides the other eight** (it reports the
+full census, then asserts once — after the artifact is written, so a failing run still leaves an image
+to look at), and the box list and page fixture are the ones already recorded in §4.
+
+`BubbleInkMaskTest` (3 cases, run by step 1) locks the mechanism rather than the page: lettering
+bridged to a closed wall by **mid-grey** pixels, with one free-standing glyph so the component
+classifier stays in charge — without it the enclosure fallback would mask the bug. Pre-fix it fails on
+the first assertion; post-fix all three pass. There is also a case pinning that promotion never reaches
+outside the box the detector drew.
+
+---
+
 ## 4. How to verify — in this order
 
 ```bash
@@ -167,8 +239,9 @@ cd ~/projects/AniTranslate
 
 # 1. Full JVM suite (the harness skips itself unless -Pharness.page is passed, so CI is untouched).
 ./gradlew testDebugUnitTest --rerun-tasks --console=plain
-#    expect: 111 tests, 0 failures, 0 errors, 1 skipped
-#    (8 of them are BubbleTextAnchorTest — the dropped-bubble regression, §3c)
+#    expect: 114 tests, 0 failures, 0 errors, 1 skipped
+#    (8 of them are BubbleTextAnchorTest — the dropped-bubble regression, §3c;
+#     3 are BubbleInkMaskTest — the fused wall+lettering repair, §3d)
 #    The 1 skip IS WiperHarnessTest, self-skipping by design — run step 2 to exercise it.
 #    Count from app/build/test-results/testDebugUnitTest/*.xml, never from the build banner:
 #    "BUILD SUCCESSFUL" is also what you get when the tests were up-to-date and never ran.
@@ -183,9 +256,14 @@ cp ~/.local/share/anitranslate/fixtures/focus_page.jpg /tmp/page.jpg
   -Pharness.out=/tmp/wiped_new.png \
   -Pharness.boxes="0.5023,0.5105,0.7401,0.6948,speech;0.5024,0.2650,0.7265,0.4273,speech;0.4637,0.7988,0.7548,0.9579,speech;0.6374,0.0364,0.9064,0.2265,speech;0.7323,0.7667,0.9439,0.9674,speech;0.0599,0.3482,0.2869,0.4961,speech;0.0589,0.8088,0.2925,0.9681,speech;0.3145,0.6192,0.4978,0.7463,speech;0.3454,0.5103,0.5001,0.6141,speech"
 #    (those 9 boxes are the detector's own output for this page — you do not need to re-run ONNX)
-#    expect: 9 lines, every one visibleResidual=0 with wallBefore == wallSurvived
-#    (last run 2026-09-21: 9/9 boxes, 112,585 of 1,627,560 px changed; box 7 wallCloses=false
-#     glyph=3004 structure=7584, box 8 wallCloses=false glyph=913 structure=8975)
+#    expect: 9 lines, every one visibleResidual=0, every wallBefore == wallSurvived, AND every
+#    enclosedLeftover=0 — that last one is measured from the image, not from the classifier (§3d).
+#    (last run 2026-09-23: 9/9 boxes, 147,651 of 1,627,560 px changed; box 7 wallCloses=false
+#     glyph=3004 structure=7584, box 8 wallCloses=false glyph=913 structure=8975 — unchanged by §3d,
+#     which is the point: those two are the fallback path, where §6 item 3 is still the open defect.
+#     Pre-§3d the same command reported 112,585 px changed and 4 boxes with ink left inside a closed
+#     wall — box 2 = 1,349, box 4 = 2,441, box 5 = 1,463, box 6 = 1,838. Reproduce that arm with
+#     `git checkout 3797c94^ -- app/src/main/java/com/example/pipeline/wipe/BubbleInkMask.kt`.)
 
 # 3. Regression page — the smooth-ellipse page the old model was tuned on. Must stay green.
 #    FIXTURE LOST (verified 2026-09-21): /tmp/j4/img/working_4.jpg no longer exists and no durable
@@ -284,8 +362,11 @@ actually care about.
    works is not a guard. Make the fallback path assert something too (e.g. the fitted shape must not
    enclose ink that is connected to the region's border).
 3. **Boxes 7 and 8 are still visibly broken, in opposite directions** — and they are the two boxes
-   the current fix does **not** help, because neither ever encloses. Do not read "byte-identical to
-   the shipped build" as "correct"; it means **unchanged**. Both are the lowest-confidence detections
+   §3d does **not** help, because neither ever encloses (both report `wallCloses=false`, so they take
+   the fallback path, which §3d leaves alone — their `glyph`/`structure` counts are byte-identical
+   before and after it). Do not read "byte-identical to the shipped build" as "correct"; it means
+   **unchanged**. It is also why §3d's new invariant cannot see them: it is skipped when no wall
+   closes, which is item 2's guard gap. Both are the lowest-confidence detections
    (.849 / .843) and their boxes bound a bubble at **no** threshold 0.55–0.86, nor with
    morphological closing.
    - **Box 7 over-wipes.** Its fallback inset hits the floor (4 px) so the shape is too large:
