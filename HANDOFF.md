@@ -389,6 +389,35 @@ actually care about.
 
 ---
 
+## 6b. Retrospective grill-me on the half-wipe fix (2026-09-23, agy)
+
+Brandon requested an adversarial retrospective review of `3797c94` via the delegated `agy`
+workhorse, using the `grill-me` skill in retrospective mode. Run blocked earlier in the day by the
+agy 1.2.9 hook-contract regression (see Cortex `debugging/20260923_agy_headless_tool_denial.md`,
+commit 3668c21 in the dotfiles repo — fixed), then executed successfully.
+
+- Full transcript: `~/.hermes/profiles/saki/cache/scratch/agy_grill.txt` (26.9 KB, 4 frontier
+  rounds + verdict). Pre/post hashes of `BubbleInkMask.kt` and `EnclosedInterior.kt` match
+  (`pre_grill_hashes.txt`) — the review changed nothing, as required (read-only; it ran the unit
+  tests itself).
+- Verdict — what to change (future work, not applied):
+  1. **Inner-wall erasure risk:** the bulk promotion `glyphMask[i] = glyph || (inside && box)` can
+     promote ink that is part of an inner closed loop or structural spine, not just lettering.
+     Recommended: promote only components of `inside.mask` matching glyph shape criteria
+     (bounding box / fill), or reject closed-loop/large-spine components.
+  2. **Inverted bubbles:** `EnclosedInterior.PAPER_LUMINANCE` (0.55) does not invert for
+     `isInverted` pages; `sampleInteriorColor` fallback also misbehaves on dark backgrounds.
+  3. Perf nits: cache `EnclosedInterior.measure` per `plan()` (recomputed at BubbleInkMask.kt:219);
+     replace the boxed `ArrayDeque<Int>` flood queue with an `IntArray`.
+- Verdict — what to leave: the enclosure principle itself, the `bounds = box && !structure`
+  leak-proof invariant, and the image-derived harness census.
+- Not determinable: interaction with the planned YOLO11n-seg mask migration; screentone-bubble
+  defect prevalence without a wider corpus.
+- Remaining user-facing work unchanged: **translation must fill the wiped interior on-device**
+  (the "floating english" complaint), SFX placement deferred, Step B (manga-ocr) HELD.
+
+---
+
 ## 7. Context to read before you touch anything
 
 ```bash
