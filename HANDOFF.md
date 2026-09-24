@@ -31,7 +31,7 @@ yourself. He has explicitly said driving the emulator UI by hand wastes tokens
 - Repo: `/home/bchow/projects/AniTranslate`, branch `main`. The measured-interior fix (§3), the
   glyph layer (§3b), the text anchoring plus unread invariant (§3c) and the half-wipe repair
   (§3d, `3797c94`) are all committed and pushed.
-- **PC suite: 114/0/0/1** — 8 of those are the anchoring regression, locked to the real page's own
+- **PC suite: 115/0/0/1** — 8 of those are the anchoring regression, locked to the real page's own
   detection output (§3c), and 3 are the fused wall+lettering repair (§3d). The single skip is the
   harness exercising itself; the step-3 regression fixture is still lost, which is an open coverage
   gap, not a pass.
@@ -232,6 +232,57 @@ outside the box the detector drew.
 
 ---
 
+## 3e. The fitted fallback makes a claim too (2026-09-23)
+
+§3d closed the half-wipe from the image, but its invariant is **skipped when no wall closes** — the
+case that had already broken twice. What was left unguarded is the **fitted fallback**: the last
+shape in the chain, fitted from the detector's box rather than measured from the image, reached only
+when the classifier found under `MIN_TEXT_PIXELS` of text *and* the image offered no enclosure.
+Nothing in the harness ran a claim against it. Its only assertion was `wallBefore > 0`, and a
+**slice passes that**: `wallBefore` stays positive while the stroke is severed.
+
+Worth knowing why this path is failure-prone by construction: reaching it means `glyphPixels < 10`,
+and the fitted interior is a subset of the box it was fitted in — so anything the fit covers is ink
+the classifier **already rejected as text**. Its only available failure mode is the over-wipe.
+
+**The guard: the fitted shape may not cover ink that reaches the region's own edge.** A glyph sits
+inside a bubble and is an island in paper; a stroke, a tail or a piece of artwork runs from one side
+of the region to the other. So ink the flood reaches from the edge is not lettering, and the fit is
+**clipped back** against it rather than trusted — an oversized shape can now only ever erase less.
+Two candidate guards were killed by measurement first, before either was written:
+
+- *"don't paint ink connected to ink outside the box"* — **0%** of the painted ink on boxes 7/8 is
+  connected to anything outside the box.
+- *"screentone dots are tiny isolated components, so guard on speckle"* — the painted ink forms
+  components of **4,892 px** (box 7) and **1,442 px** (box 8). A dense dot field is 8-connected, not
+  speckle, so that guard would never fire.
+
+**Proof, in the order it was done** (`project-bulcan`: a guard nobody has seen fail is not a guard):
+
+1. **RED** — `BubbleInkMaskTest`: a bar too long to be lettering, running out through the region on
+   both sides, so the fitted shape bisects it. Against the pre-fix source:
+   `BubbleInkMaskTest > the fitted fallback must not eat a stroke that leaves the region FAILED` /
+   `java.lang.AssertionError at BubbleInkMaskTest.kt:154`. The fallback really did eat it.
+2. **GREEN** — `borderConnectedInk`, seeded from the region's edge and 8-connected, with the shape
+   never consulted; the same test passes and the plan returns an empty wipe.
+3. **No regression** — the focus page is byte-identical: 9/9 boxes, **147,651** of 1,627,560 px
+   changed, box 7 `glyph=3004 structure=7584`, box 8 `glyph=913 structure=8975`, every
+   `visibleResidual=0`, every `wallBefore == wallSurvived`, every `enclosedLeftover=0`.
+4. **The harness asserts it from the image for every box**, whenever no wall closed — deliberately
+   an independent flood fill (`edgeConnectedDarkInk`), reading the pixels as they were **before** the
+   wipe, so a wipe cannot hide what it painted by having painted it. It does run on boxes 7/8 (both
+   `wallCloses=false`) and reports 0 violations, independently confirming that their damage lies
+   inside the box and is **not** an edge-connectivity defect.
+
+It fails open in one case worth knowing: for an **inverted** (dark) region the ink polarity flips and
+`edgeConnectedDarkInk` returns nothing, so the assertion cannot fire there. The census above it has
+the same light-bubble assumption.
+
+**Scope, stated honestly:** this closes the guard gap. It does **not** fix boxes 7/8, which never
+reach the fitted path at all — see §6 item 3 for what they actually do.
+
+---
+
 ## 4. How to verify — in this order
 
 ```bash
@@ -239,9 +290,10 @@ cd ~/projects/AniTranslate
 
 # 1. Full JVM suite (the harness skips itself unless -Pharness.page is passed, so CI is untouched).
 ./gradlew testDebugUnitTest --rerun-tasks --console=plain
-#    expect: 114 tests, 0 failures, 0 errors, 1 skipped
+#    expect: 115 tests, 0 failures, 0 errors, 1 skipped
 #    (8 of them are BubbleTextAnchorTest — the dropped-bubble regression, §3c;
-#     3 are BubbleInkMaskTest — the fused wall+lettering repair, §3d)
+#     4 are BubbleInkMaskTest — the fused wall+lettering repair §3d and the fitted-fallback
+#     guard §3e)
 #    The 1 skip IS WiperHarnessTest, self-skipping by design — run step 2 to exercise it.
 #    Count from app/build/test-results/testDebugUnitTest/*.xml, never from the build banner:
 #    "BUILD SUCCESSFUL" is also what you get when the tests were up-to-date and never ran.
@@ -259,8 +311,11 @@ cp ~/.local/share/anitranslate/fixtures/focus_page.jpg /tmp/page.jpg
 #    expect: 9 lines, every one visibleResidual=0, every wallBefore == wallSurvived, AND every
 #    enclosedLeftover=0 — that last one is measured from the image, not from the classifier (§3d).
 #    (last run 2026-09-23: 9/9 boxes, 147,651 of 1,627,560 px changed; box 7 wallCloses=false
-#     glyph=3004 structure=7584, box 8 wallCloses=false glyph=913 structure=8975 — unchanged by §3d,
-#     which is the point: those two are the fallback path, where §6 item 3 is still the open defect.
+#     glyph=3004 structure=7584, box 8 wallCloses=false glyph=913 structure=8975 — unchanged by §3d
+#     *and* by §3e, which is the point: byte-identical means UNCHANGED, and neither box is the
+#     fallback path. Both counters are non-zero, and the fitted fallback returns glyphPixels=0 /
+#     structurePixels=0 by construction (`Plan`'s defaults), so they leave through the classified
+#     return with no enclosure — `BubbleInkMask.kt:204`. §6 item 3 corrects the attribution.
 #     Pre-§3d the same command reported 112,585 px changed and 4 boxes with ink left inside a closed
 #     wall — box 2 = 1,349, box 4 = 2,441, box 5 = 1,463, box 6 = 1,838. Reproduce that arm with
 #     `git checkout 3797c94^ -- app/src/main/java/com/example/pipeline/wipe/BubbleInkMask.kt`.)
@@ -357,24 +412,46 @@ actually care about.
    verified on three real pages on the phone (§2). What is left is **Step B — manga-ocr ONNX
    on-device**, so that *every* detected text region is read locally and a skipped bubble is covered
    instead of merely reported. Until it ships, unread regions stay loud and untouched.
-2. **Close the guard gap — highest value.** The over-wipe invariant is **skipped when no wall closes**,
-   which is exactly the case that broke twice. An invariant that only runs in the case that already
-   works is not a guard. Make the fallback path assert something too (e.g. the fitted shape must not
-   enclose ink that is connected to the region's border).
+2. ~~**Close the guard gap — highest value.** The over-wipe invariant is **skipped when no wall
+   closes**, which is exactly the case that broke twice. An invariant that only runs in the case that
+   already works is not a guard. Make the fallback path assert something too (e.g. the fitted shape
+   must not enclose ink that is connected to the region's border).~~ **DONE — §3e (2026-09-23).**
+   The fitted fallback now clips its own guess against ink that reaches the region's edge, and the
+   harness asserts that claim from the image for every box where no wall closed. Honest scope: the
+   fitted path is reached only when there was **no ink to classify at all**, so closing this gap
+   moved **no number on the focus page** (147,651 px changed, byte-identical before and after). It
+   was still the right guard — an unexercised path with an unasserted guess is where the next defect
+   hides — but it is not the fix for boxes 7/8. See item 3.
 3. **Boxes 7 and 8 are still visibly broken, in opposite directions** — and they are the two boxes
-   §3d does **not** help, because neither ever encloses (both report `wallCloses=false`, so they take
-   the fallback path, which §3d leaves alone — their `glyph`/`structure` counts are byte-identical
-   before and after it). Do not read "byte-identical to the shipped build" as "correct"; it means
-   **unchanged**. It is also why §3d's new invariant cannot see them: it is skipped when no wall
-   closes, which is item 2's guard gap. Both are the lowest-confidence detections
-   (.849 / .843) and their boxes bound a bubble at **no** threshold 0.55–0.86, nor with
-   morphological closing.
-   - **Box 7 over-wipes.** Its fallback inset hits the floor (4 px) so the shape is too large:
-     *"slices straight through the scalloped left bubble wall, obliterating the lobes"*. The
-     installed build already does this.
-   - **Box 8 under-wipes severely.** Its fallback inset lands on the **exact clamp**
-     `min(w,h)/3 = 52`, collapsing the interior to ~9.9% of the box, so the text survives
-     (*"う, the ellipsis dots, both え — only the ! is wiped"*).
+   §3d does **not** help, because neither ever encloses (both report `wallCloses=false`). Do not read
+   "byte-identical to the shipped build" as "correct"; it means **unchanged**. Both are the
+   lowest-confidence detections (.849 / .843) and their boxes bound a bubble at **no** threshold
+   0.55–0.86, nor with morphological closing.
+   - **MECHANISM CORRECTED (2026-09-23, from the harness's own output).** An earlier revision of
+     this item — and the roadmap's P2 — held that both boxes take the **fitted fallback** and blamed
+     their `wallInset` (4 = the floor; 52 = the `min(w,h)/3` clamp). That is **false**. The harness
+     prints `inkMask=true glyph=3004 structure=7584` (box 7) and `glyph=913 structure=8975` (box 8),
+     and the fitted fallback returns `Plan(wallInset, interior, BooleanArray(count), false)` —
+     `glyphPixels`/`structurePixels` are `Plan` defaults of **0**. Non-zero on both counters means
+     both leave through the **classified** return with no enclosure, `BubbleInkMask.kt:204`, where
+     `interior` is the detector's **whole box**, no shape is ever fitted, and `wallInset` is
+     **carried for reporting only — never used**. Neither box is a geometry failure.
+   - **The real mechanism is one mistake, not two:** the classifier's glyph/structure split is being
+     judged inside a box that does not bound the bubble. Box 7 calls too much **glyph** (3,004 px,
+     including the scalloped wall's lobes) → over-wipe. Box 8 calls too much **structure**
+     (8,975 px, including う and both え, which are then exempt from the wipe) → severe under-wipe.
+   - **Why no count can see it:** with `interior` = the whole box, every dark pixel inside the box
+     reads as "interior", so the wall census only ever measures the region *margin*. Measured from
+     the image: 100% of these boxes' painted pixels lie **inside** the box and **none** is
+     8-connected to the region's edge — so neither a wall census nor §3e's connectivity guard can
+     catch this. It is a detection limit, which is the next bullet's point.
+   - **Box 7 over-wipes** (the installed build already does this). The visual read — *"slices
+     straight through the scalloped left bubble wall, obliterating the lobes"* — is right as a
+     symptom; the fitted-shape blame was wrong. The classifier labels the lobes **glyph**, so the
+     wipe paints them.
+   - **Box 8 under-wipes severely.** 8,975 px are called **structure** and therefore exempt, so う
+     and both え survive (*"う, the ellipsis dots, both え — only the ! is wiped"*). Not a collapsed
+     interior — the interior is the full box.
    **This is a detection limit, not a wipe limit** — a box that does not bound the bubble cannot be
    measured. The honest fix is a **segmentation mask rather than a box** —
    `huyvux3005/manga109-segmentation-bubble` (YOLO11n-seg) is the candidate; check its licence before
