@@ -546,6 +546,19 @@ outline intact; every changed pixel accounted for as lettering or off-white pape
 it can only shrink the paint set — but that is defence in depth, and it must not be written up as a
 repair.
 
+**The mechanism, from a second pass with a different question** (asking specifically whether any
+*dark* ink was destroyed): across the wall and screentone, **0 dark ink pixels were altered** — all
+2,247 ink pixels of the halftone dots and border are bit-for-bit identical between source and wiped —
+while the near-white *interstitial* pixels between the dots (JPEG noise around 241–254) were clamped
+to pure 255. That population is what the difference map paints red outside the lettering, and it is
+the same population as box 7's 1,257 px: **paper sanitisation one or two code values deep, not
+artwork.** Two passes with different questions agreed; the harness agrees with both.
+
+**And one thing this does NOT establish.** The mask path raises box 8's glyph count only 913 → 1,978,
+while the visual pass measures `うええ`'s column at ~2,336 surviving ink pixels. The promotion
+*mechanism* is unit-proven (that is what the 260 px RED exercises); **its sufficiency on the real page
+is not.** Do not write "the mask erases `うええ`" until the harness can pass a real mask and show it.
+
 **What landed.** `plan()` takes an optional `bubbleMask`. It is folded into `boxMask` itself rather
 than consulted separately, so every gate downstream — the ink candidates, the erase bounds, the
 enclosure promotion, the fitted fallback — takes its authority from the measurement at once and none
