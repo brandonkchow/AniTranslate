@@ -157,4 +157,86 @@ class BubbleInkMaskTest {
             countIn(result.wipe, 20, 38, 60, 44)
         )
     }
+
+    /** The bubble's measured interior, as the segmenter reports it: an ellipse in region pixels. */
+    private fun ellipse(cx: Int, cy: Int, rx: Int, ry: Int) = BooleanArray(count) { i ->
+        val dx = ((i % size) - cx).toFloat() / rx
+        val dy = ((i / size) - cy).toFloat() / ry
+        dx * dx + dy * dy <= 1f
+    }
+
+    private fun planMeasured(
+        pixels: IntArray,
+        box: BubbleInkMask.BoxFrame,
+        bubbleMask: BooleanArray
+    ) = BubbleInkMask.plan(
+        pixels = pixels,
+        width = size,
+        height = size,
+        bgColor = paper,
+        shape = BubbleInterior.Shape.ELLIPSE,
+        densityScale = 1f,
+        box = box,
+        bubbleMask = bubbleMask
+    )
+
+    @Test
+    fun `a measured interior bounds the wipe where the box does not`() {
+        // The detector's box is not always bounded by the bubble. An over-tall box runs past the
+        // bubble's floor and clips the artwork below it, and the classifier then reads that artwork
+        // as strokes of its own, calls it lettering, and paints it: the bubble is eaten away from
+        // the outside and redrawn at a boundary that was never the bubble's. This is the defect
+        // class the measured interior exists to end.
+        //
+        // The measurement cannot be argued with the way a shape can. It is where the bubble
+        // actually is, so nothing outside it may be repainted whatever the classifier believes, and
+        // nothing inside it may be left behind. Both halves are asserted below: the strokes the
+        // over-tall box clipped must survive, and the lettering inside the bubble must not.
+        val pixels = region(
+            *ring(20, 20, 60, 50),
+            intArrayOf(30, 28, 36, 40, ink), // lettering inside the bubble
+            intArrayOf(24, 58, 56, 61, ink), // artwork the over-tall box clipped: a thin stroke,
+            intArrayOf(24, 64, 40, 67, ink) // too long and too straight to have been lettering
+        )
+        val result = planMeasured(
+            pixels = pixels,
+            box = frame(20, 20, 40, 50), // runs 20 rows past the bubble's floor
+            bubbleMask = ellipse(cx = 40, cy = 35, rx = 18, ry = 13)
+        )
+
+        assertEquals(
+            "artwork below the bubble was repainted, at a boundary the bubble never had",
+            0,
+            countIn(result.wipe, 20, 51, 60, 70)
+        )
+        assertEquals(
+            "the overrun past the bubble was reported as interior",
+            0,
+            countIn(result.interior, 20, 51, 60, 70)
+        )
+        assertTrue(
+            "lettering inside the measured bubble was left behind",
+            countIn(result.wipe, 30, 28, 36, 40) > 0
+        )
+    }
+
+    @Test
+    fun `without a measured interior the box remains the whole authority`() {
+        // The no-mask path must stay bit-identical to what shipped: everything the box encloses is
+        // still the authority, including the overrun. This pins that the mask is additive and that
+        // the previous behaviour was not quietly narrowed for callers that have no segmenter.
+        val pixels = region(
+            *ring(20, 20, 60, 50),
+            intArrayOf(30, 28, 36, 40, ink)
+        )
+        val result = plan(pixels, frame(20, 20, 40, 50))
+
+        // Every pixel of the box is interior, overrun included: with no measurement there is nothing
+        // else the authority could be, so this is the exact width of the path that shipped.
+        assertEquals(
+            "the box stopped being the authority when no measurement was supplied",
+            40 * 50,
+            countIn(result.interior, 20, 20, 60, 70)
+        )
+    }
 }

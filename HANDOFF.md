@@ -509,3 +509,66 @@ cortex-recall "anitranslate bubble interior"     # curated local knowledge, <30 
 **Reporting back to Brandon** (he requires this): state the exact file paths changed, whether the
 work was committed and pushed, and whether it belongs in Cortex. If nothing changed, omit it.
 Credentials live in slot storage / `.env` — **never** read them into a summary, a log, or a commit.
+
+---
+
+## 8. P2, planner half: the measured interior is now the authority (2026-09-24)
+
+The segmenter is real, and it changes the shape of the fix.
+`huyvux3005/manga109-segmentation-bubble` (Apache-2.0, YOLO11n-seg on Manga109) is exported to
+`best.onnx` — **11.0 MB fp32, opset 18** — and the spike answered a question the planner could not
+answer from the box alone.
+
+**What the spike found, and it is not what §6 assumed.** At both 640 and 1600 the model returns
+**8 masks for 9 boxes**: mask 6's bbox `(0.327,0.516,0.494,0.743)` spans box 7 *and* box 8. They are
+one bubble, split in two by the detector. The geometry says so three ways: the seven well-bounded
+boxes sit at `cover_box` 0.735–0.821 against **π/4 = 0.785** (an ellipse inscribed in its rectangle),
+mask 6 covers 0.694 of the two boxes' union box with **0 px falling outside it**, and its ink splits
+clean:
+
+| ink | px | components | largest |
+| :--- | ---: | ---: | ---: |
+| inside the mask (lettering) | 3,747 | 39 | 465 |
+| outside it (artwork) | 11,129 | 298 | **7,594** |
+
+The wall is *outside* the mask: the model segments the bubble's interior, not its outline. That is
+what makes "ink inside the measured interior is text" safe to assert — the stroke cannot be promoted,
+because it is not in the mask being promoted from.
+
+**The repair direction, predicted before the change and matching the census exactly:** box 7's erase
+*shrinks* by 1,257 px (3,004 planned → 1,747 inside the bubble; that difference is the wall it was
+eating), and box 8's *grows* by 1,065 px (913 → 1,978; that is うええ promoted instead of exempted).
+
+**What landed.** `plan()` takes an optional `bubbleMask`. It is folded into `boxMask` itself rather
+than consulted separately, so every gate downstream — the ink candidates, the erase bounds, the
+enclosure promotion, the fitted fallback — takes its authority from the measurement at once and none
+can be left behind on the box. A second branch promotes ink inside the measured interior ahead of the
+topology guess: the same argument line 178 makes, measured instead of inferred, no longer needing the
+wall to close. With no mask the intersection is a no-op, so **the path that shipped is bit-identical**
+and this cannot regress a page that has no segmenter.
+
+**Evidence.** `BubbleInkMaskTest` 6/6; full suite **117/0/0/1** (was 115: +2 guards, 0 regressions).
+The over-tall-box guard was seen to fail — with the measurement stripped back out of the authority it
+reports `expected:<0> but was:<260>`, 260 px of artwork repainted at a boundary the bubble never had.
+Restored byte-exact (`sha256 0097d4c5…`) and re-verified.
+
+**Cost, measured on wuwei (Ryzen 3500U, a 2019 laptop CPU):** **202 ms median per 640 px page**
+through the exported ONNX with the Python wrapper included — a 20-page chapter in 4.0 s. Export
+fidelity is **worst per-mask IoU 0.995** against the `.pt`, so what was measured is what the phone
+bundles. 11 MB fp32 → ~2.8 MB INT8. The phone is not the constraint.
+
+**What is still open — this is half the work, and it is inert until the rest lands:**
+
+1. **Nothing supplies a mask yet.** The new parameter is exercised only by unit tests. The Android
+   side needs an `OnnxBubbleSegmenter` (optional ORT session over the bundled asset, degrading to
+   today's path when the load fails), letterbox→page coordinate inversion, and mask→box matching.
+   **Note the 8-for-9 problem**: masks do not map 1:1 onto detector boxes, so matching is by overlap
+   and containment, never by index.
+2. **`FlatWiper.wipeBubbles` must carry the mask through** to `plan` — it is the single caller
+   (`FlatWiper.kt:88`) and already crops the box into region coordinates, which is the natural place
+   to crop the mask the same way.
+3. **The harness cannot pass a mask**, so the real-page census cannot yet run against boxes 7/8 with
+   the real measurement. Until it can, §4's box 7/8 numbers describe the *box* path.
+4. **The over-split is a typesetting problem too**: two boxes over one bubble means two translated
+   text blocks typeset into two halves of one bubble. The mask fixes the wipe; it does not fix the
+   layout. Option 1 was chosen for the wipe and that is what it delivers.
