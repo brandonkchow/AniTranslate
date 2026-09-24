@@ -24,8 +24,13 @@ import com.example.pipeline.router.KeyRouter
 import com.example.pipeline.router.PipelineStage
 import com.example.pipeline.typeset.Typesetter
 import com.example.pipeline.wipe.FlatWiper
+import com.example.pipeline.router.StandbyWalkDiagnostics
 import com.example.utils.RunLogger
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -39,7 +44,11 @@ class PagePipeline(
 ) {
 
     companion object {
-        private val loggedJobExclusions = ConcurrentHashMap.newKeySet<Long>()
+        private val loggedRunExclusions = ConcurrentHashMap.newKeySet<String>()
+
+        fun resetLoggedExclusions() {
+            loggedRunExclusions.clear()
+        }
     }
 
     private val slotStorage: SlotStorage by lazy { SlotStorage.getInstance(context) }
@@ -51,6 +60,36 @@ class PagePipeline(
      * page's runtime. Lazy so a device that cannot load it pays nothing.
      */
     private val bubbleDetector: OnnxBubbleDetector by lazy { OnnxBubbleDetector(context) }
+
+    private suspend fun <T> executeWithSlotAndObservability(
+        stage: PipelineStage,
+        slot: ApiSlot,
+        pageIndex: Int,
+        jobId: Long,
+        modelLabel: String = slot.model,
+        thresholdMs: Long = 15_000L,
+        block: suspend (ApiSlot) -> Result<T>
+    ): Pair<Result<T>, Long> {
+        val startTimeMs = System.currentTimeMillis()
+        val watcherJob = CoroutineScope(Dispatchers.Default).launch {
+            var elapsed = thresholdMs
+            while (isActive) {
+                delay(thresholdMs)
+                RunLogger.logPageEvent(
+                    context, jobId, pageIndex, "WAIT",
+                    "Still waiting for \"${slot.displayTitle}\" ($modelLabel) response (${elapsed / 1000}s elapsed)..."
+                )
+                elapsed += thresholdMs
+            }
+        }
+        return try {
+            val result = keyRouter.executeWithSlot(stage, slot, block = block)
+            val elapsedMs = System.currentTimeMillis() - startTimeMs
+            Pair(result, elapsedMs)
+        } finally {
+            watcherJob.cancel()
+        }
+    }
 
     suspend fun processPage(
         page: PageEntity,
@@ -65,9 +104,9 @@ class PagePipeline(
 
         val catalog = catalogStore.load()
 
-        // Emit ONE exclusion summary per job
-        if (!loggedJobExclusions.contains(currentPage.jobId)) {
-            loggedJobExclusions.add(currentPage.jobId)
+        // Emit ONE exclusion summary per run
+        val currentRunId = RunLogger.getActiveRunId(currentPage.jobId) ?: "run_job_${currentPage.jobId}"
+        if (loggedRunExclusions.add(currentRunId)) {
             val detectExclusions = keyRouter.explain(PipelineStage.DETECT_OCR, catalog = catalog)
             val translateExclusions = keyRouter.explain(PipelineStage.TRANSLATE, catalog = catalog)
             val summary = buildString {
@@ -78,7 +117,6 @@ class PagePipeline(
                 append("]")
             }
             RunLogger.log(context, currentPage.jobId, "SLOT_EXCLUSIONS", summary)
-            RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "SLOT_EXCLUSIONS", summary)
         }
         val origFile = File(currentPage.originalCachePath)
         if (!origFile.exists()) {
@@ -224,16 +262,23 @@ class PagePipeline(
                 val (slot, waitTime) = keyRouter.getAvailableSlot(PipelineStage.DETECT_OCR, attemptedDetectSlotIds)
                 if (slot == null) {
                     // Primary slots exhausted or cooling down. Try the catalog's free IMAGE + JSON standby walk.
+                    RunLogger.logPageEvent(
+                        context, currentPage.jobId, currentPage.pageIndex, "STANDBY_WALK",
+                        StandbyWalkDiagnostics.formatCandidatesLog(standbyVisionModels)
+                    )
                     var standbyAttempted = false
                     val allSlots = slotStorage.slots.value
                     for (standbyModel in standbyVisionModels) {
                         if (totalDetectAttempts >= maxAttempts) break
                         val eligibleSlot = allSlots.firstOrNull { s ->
-                            s.enabled &&
-                            s.provider.name.equals(standbyModel.providerId, ignoreCase = true) &&
-                            (s.apiKey.isNotBlank() || s.provider == ApiProvider.WORKSTATION || s.provider == ApiProvider.HUGGINGFACE) &&
-                            !s.isInvalidKey &&
-                            !s.isCoolingDown()
+                            // Same predicate the diagnostics explain with, so the logged reason
+                            // can never disagree with what the walk actually tried.
+                            StandbyWalkDiagnostics.isSlotEligibleForProvider(
+                                slot = s,
+                                providerId = standbyModel.providerId,
+                                attemptedSlotIds = emptySet(),
+                                stage = PipelineStage.DETECT_OCR
+                            )
                         } ?: continue
 
                         standbyAttempted = true
@@ -247,11 +292,13 @@ class PagePipeline(
                         onStatusUpdate(currentPage)
 
                         val standbyFallbacks = standbyVisionModels.filter { it.id != standbyModel.id }.map { it.id }.take(3)
-                        val startTimeMs = System.currentTimeMillis()
-                        val standbyResult = keyRouter.executeWithSlot(PipelineStage.DETECT_OCR, eligibleSlot) { s ->
+                        val (standbyResult, attemptElapsedMs) = executeWithSlotAndObservability(
+                            PipelineStage.DETECT_OCR, eligibleSlot, currentPage.pageIndex, currentPage.jobId,
+                            modelLabel = standbyModel.id
+                        ) { s ->
                             openAiClient.detectBubbles(s.baseUrl, s.apiKey, standbyModel.id, base64, provider = s.provider, fallbackModels = standbyFallbacks)
                         }
-                        elapsedMs = System.currentTimeMillis() - startTimeMs
+                        elapsedMs = attemptElapsedMs
 
                         if (standbyResult.isFailure) {
                             val errorInfo = classifyException(standbyResult.exceptionOrNull())
@@ -259,7 +306,7 @@ class PagePipeline(
                             attemptedDetectNotes += "${eligibleSlot.displayTitle}:${standbyModel.id} [${errorInfo.eventTag}]"
                             RunLogger.logPageEvent(
                                 context, currentPage.jobId, currentPage.pageIndex, errorInfo.eventTag,
-                                "${errorInfo.userMessage} (${elapsedMs}ms) — standby slot \"${eligibleSlot.displayTitle}\" (${standbyModel.id}), attempt $totalDetectAttempts/$maxAttempts"
+                                "${errorInfo.userMessage} (${elapsedMs}ms, cause: ${errorInfo.eventTag}) — standby slot \"${eligibleSlot.displayTitle}\" (${standbyModel.id}), attempt $totalDetectAttempts/$maxAttempts"
                             )
                             continue
                         }
@@ -279,11 +326,18 @@ class PagePipeline(
 
                     if (!standbyAttempted) {
                         val waitUntil = waitTime ?: (System.currentTimeMillis() + 15000L)
-                        val errorMsg = if (attemptedDetectNotes.isEmpty()) {
+                        val standbySummary = StandbyWalkDiagnostics.formatStandbySummary(
+                            standbyCandidates = standbyVisionModels,
+                            slots = allSlots,
+                            now = System.currentTimeMillis(),
+                            attemptedSlotIds = emptySet()
+                        )
+                        val baseMsg = if (attemptedDetectNotes.isEmpty()) {
                             "All vision keys cooling down or not configured."
                         } else {
                             "All vision slots exhausted. Tried: ${attemptedDetectNotes.joinToString("; ")}"
                         }
+                        val errorMsg = "$baseMsg | $standbySummary"
                         currentPage = currentPage.copy(
                             status = if (attemptedDetectNotes.isEmpty()) PageStatus.WAITING else PageStatus.FAILED,
                             waitingUntilEpochMs = waitUntil,
@@ -303,8 +357,9 @@ class PagePipeline(
                 RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "DETECT_START", "Detecting with ${slot.displayTitle} (${slot.model})$attemptSuffix")
                 onStatusUpdate(currentPage)
 
-                val startTimeMs = System.currentTimeMillis()
-                val detectResult = keyRouter.executeWithSlot(PipelineStage.DETECT_OCR, slot) { s ->
+                val (detectResult, attemptElapsedMs) = executeWithSlotAndObservability(
+                    PipelineStage.DETECT_OCR, slot, currentPage.pageIndex, currentPage.jobId
+                ) { s ->
                     when (s.provider) {
                         ApiProvider.GEMINI -> geminiClient.detectBubbles(s.baseUrl, s.apiKey, s.model, base64)
                         ApiProvider.OPENROUTER -> {
@@ -316,7 +371,7 @@ class PagePipeline(
                         ApiProvider.GROQ -> Result.failure(IllegalArgumentException("Groq does not support image detection."))
                     }
                 }
-                elapsedMs = System.currentTimeMillis() - startTimeMs
+                elapsedMs = attemptElapsedMs
 
                 if (detectResult.isFailure) {
                     val errorInfo = classifyException(detectResult.exceptionOrNull())
@@ -324,7 +379,7 @@ class PagePipeline(
                     attemptedDetectNotes += "${slot.displayTitle} [${errorInfo.eventTag}]"
                     RunLogger.logPageEvent(
                         context, currentPage.jobId, currentPage.pageIndex, errorInfo.eventTag,
-                        "${errorInfo.userMessage} (${elapsedMs}ms) — slot \"${slot.displayTitle}\" (${slot.model}), attempt $totalDetectAttempts/$maxAttempts"
+                        "${errorInfo.userMessage} (${elapsedMs}ms, cause: ${errorInfo.eventTag}) — slot \"${slot.displayTitle}\" (${slot.model}), attempt $totalDetectAttempts/$maxAttempts"
                     )
                     continue
                 }
@@ -355,7 +410,7 @@ class PagePipeline(
                     errorMessage = detail,
                     activeSlotName = ""
                 )
-                RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, errorInfo.eventTag, "$detail (${elapsedMs}ms)")
+                RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, errorInfo.eventTag, "$detail (${elapsedMs}ms, cause: ${errorInfo.eventTag})")
                 onStatusUpdate(currentPage)
                 return@withContext currentPage
             }
@@ -461,8 +516,9 @@ class PagePipeline(
                     "0 bubbles detected in Pass 1 (${elapsedMs}ms). Triggering Pass 2 'Scan-All-Text' OCR Fallback..."
                 )
 
-                val fallbackStartTimeMs = System.currentTimeMillis()
-                val fallbackResult = keyRouter.executeWithSlot(PipelineStage.DETECT_OCR, activeDetectSlot) { s ->
+                val (fallbackResult, fallbackElapsedMs) = executeWithSlotAndObservability(
+                    PipelineStage.DETECT_OCR, activeDetectSlot, currentPage.pageIndex, currentPage.jobId
+                ) { s ->
                     when (s.provider) {
                         ApiProvider.GEMINI -> geminiClient.scanAllText(s.baseUrl, s.apiKey, s.model, base64)
                         ApiProvider.OPENROUTER, ApiProvider.CUSTOM, ApiProvider.WORKSTATION, ApiProvider.HUGGINGFACE ->
@@ -470,7 +526,6 @@ class PagePipeline(
                         ApiProvider.GROQ -> Result.failure(IllegalArgumentException("Groq does not support image detection."))
                     }
                 }
-                val fallbackElapsedMs = System.currentTimeMillis() - fallbackStartTimeMs
 
                 if (fallbackResult.isSuccess) {
                     val fallbackBubbles = fallbackResult.getOrNull().orEmpty()
@@ -605,8 +660,9 @@ class PagePipeline(
                     )
                     onStatusUpdate(currentPage)
 
-                    val startTimeMs = System.currentTimeMillis()
-                    val transResult = keyRouter.executeWithSlot(PipelineStage.TRANSLATE, slot) { s ->
+                    val (transResult, attemptElapsedMs) = executeWithSlotAndObservability(
+                        PipelineStage.TRANSLATE, slot, currentPage.pageIndex, currentPage.jobId
+                    ) { s ->
                         openAiClient.translateBubbles(
                             s.baseUrl, s.apiKey, s.model, bubbles,
                             provider = s.provider,
@@ -614,7 +670,7 @@ class PagePipeline(
                             fallbackModels = fallbackModels
                         )
                     }
-                    val elapsedMs = System.currentTimeMillis() - startTimeMs
+                    val elapsedMs = attemptElapsedMs
                     lastElapsedMs = elapsedMs
 
                     if (transResult.isFailure) {
@@ -623,7 +679,7 @@ class PagePipeline(
                         attemptedSlotNotes += "${slot.displayTitle} [${errorInfo.eventTag}]"
                         RunLogger.logPageEvent(
                             context, currentPage.jobId, currentPage.pageIndex, errorInfo.eventTag,
-                            "${errorInfo.userMessage} (${elapsedMs}ms) — slot \"${slot.displayTitle}\" (${slot.model}), attempt $totalTranslateAttempts/$translateBudget"
+                            "${errorInfo.userMessage} (${elapsedMs}ms, cause: ${errorInfo.eventTag}) — slot \"${slot.displayTitle}\" (${slot.model}), attempt $totalTranslateAttempts/$translateBudget"
                         )
                         continue
                     }
@@ -663,14 +719,16 @@ class PagePipeline(
                         )
                         onStatusUpdate(currentPage)
 
-                        val startTimeMs = System.currentTimeMillis()
-                        val transResult = keyRouter.executeWithSlot(PipelineStage.TRANSLATE, slot) { s ->
+                        val (transResult, attemptElapsedMs) = executeWithSlotAndObservability(
+                            PipelineStage.TRANSLATE, slot, currentPage.pageIndex, currentPage.jobId,
+                            modelLabel = candidateModel
+                        ) { s ->
                             when (s.provider) {
                                 ApiProvider.GEMINI -> geminiClient.translateBubbles(s.baseUrl, s.apiKey, candidateModel, bubbles, storyContext = storyContext)
                                 else -> openAiClient.translateBubbles(s.baseUrl, s.apiKey, candidateModel, bubbles, provider = s.provider, storyContext = storyContext)
                             }
                         }
-                        val elapsedMs = System.currentTimeMillis() - startTimeMs
+                        val elapsedMs = attemptElapsedMs
                         lastElapsedMs = elapsedMs
 
                         if (transResult.isFailure) {
@@ -679,7 +737,7 @@ class PagePipeline(
                             attemptedSlotNotes += "${slot.displayTitle}:$candidateModel [${errorInfo.eventTag}]"
                             RunLogger.logPageEvent(
                                 context, currentPage.jobId, currentPage.pageIndex, errorInfo.eventTag,
-                                "${errorInfo.userMessage} (${elapsedMs}ms) — slot \"${slot.displayTitle}\" ($candidateModel), attempt $totalTranslateAttempts/$translateBudget"
+                                "${errorInfo.userMessage} (${elapsedMs}ms, cause: ${errorInfo.eventTag}) — slot \"${slot.displayTitle}\" ($candidateModel), attempt $totalTranslateAttempts/$translateBudget"
                             )
                             if (errorInfo.isRateLimit || errorInfo.eventTag == "AUTH_FAIL") {
                                 break
@@ -725,7 +783,7 @@ class PagePipeline(
                     errorMessage = detail,
                     activeSlotName = ""
                 )
-                RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, errorInfo.eventTag, "$detail (${lastElapsedMs}ms)")
+                RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, errorInfo.eventTag, "$detail (${lastElapsedMs}ms, cause: ${errorInfo.eventTag})")
                 onStatusUpdate(currentPage)
                 return@withContext currentPage
             }
@@ -817,17 +875,22 @@ class PagePipeline(
                 exception is java.net.ConnectException ||
                 exception is javax.net.ssl.SSLException ||
                 exception is java.io.IOException ||
+                exception is java.util.concurrent.TimeoutException ||
                 (exception.message?.contains("Unable to resolve host", ignoreCase = true) == true) ||
                 (exception.message?.contains("timeout", ignoreCase = true) == true) ||
                 (exception.message?.contains("connection", ignoreCase = true) == true)
 
         if (isNetworkException) {
+            val isTimeout = exception is java.net.SocketTimeoutException ||
+                    exception is java.util.concurrent.TimeoutException ||
+                    exception.message?.contains("timeout", ignoreCase = true) == true
+            val tag = if (isTimeout) "TIMEOUT" else "NETWORK_RETRY"
             return ErrorDisposition(
                 isTransient = true,
                 isRateLimit = false,
                 backoffMs = 12_000L,
-                eventTag = "NETWORK_RETRY",
-                userMessage = "Network/DNS issue (${exception.message}). Auto-retrying..."
+                eventTag = tag,
+                userMessage = if (isTimeout) "Request timed out (${exception.message}). Auto-retrying..." else "Network/DNS issue (${exception.message}). Auto-retrying..."
             )
         }
 

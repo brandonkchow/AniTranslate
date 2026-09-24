@@ -41,6 +41,7 @@ class KeyRouter(
 ) {
     companion object {
         const val DEFAULT_MAX_ATTEMPTS = 3
+        const val DEFAULT_ATTEMPT_TIMEOUT_MS = 60_000L
     }
 
     // Concurrency controls per slot:
@@ -137,31 +138,40 @@ class KeyRouter(
     suspend fun <T> executeWithSlot(
         stage: PipelineStage,
         slot: ApiSlot,
+        timeoutMs: Long = DEFAULT_ATTEMPT_TIMEOUT_MS,
         block: suspend (ApiSlot) -> Result<T>
     ): Result<T> {
         val slotSem = getSlotSemaphore(slot.id)
         val visionSem = if (stage == PipelineStage.DETECT_OCR) getVisionSemaphore(slot.id) else null
         val startTime = System.currentTimeMillis()
 
-        val result = if (visionSem != null) {
-            visionSem.acquire()
-            try {
-                slotSem.acquire()
-                try {
-                    block(slot)
-                } finally {
-                    slotSem.release()
+        val result = try {
+            kotlinx.coroutines.withTimeout(timeoutMs) {
+                if (visionSem != null) {
+                    visionSem.acquire()
+                    try {
+                        slotSem.acquire()
+                        try {
+                            block(slot)
+                        } finally {
+                            slotSem.release()
+                        }
+                    } finally {
+                        visionSem.release()
+                    }
+                } else {
+                    slotSem.acquire()
+                    try {
+                        block(slot)
+                    } finally {
+                        slotSem.release()
+                    }
                 }
-            } finally {
-                visionSem.release()
             }
-        } else {
-            slotSem.acquire()
-            try {
-                block(slot)
-            } finally {
-                slotSem.release()
-            }
+        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+            Result.failure(java.util.concurrent.TimeoutException("Request timed out after ${timeoutMs}ms"))
+        } catch (e: Exception) {
+            Result.failure(e)
         }
 
         val latencyMs = System.currentTimeMillis() - startTime

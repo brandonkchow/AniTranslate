@@ -9,6 +9,7 @@ object HttpClientProvider {
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(75, TimeUnit.SECONDS)
             .writeTimeout(75, TimeUnit.SECONDS)
+            .callTimeout(90, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
             .build()
     }

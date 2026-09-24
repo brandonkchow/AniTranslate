@@ -30,6 +30,11 @@ object RunLogger {
 
     // In-memory mapping of active run ID per jobId
     private val activeRuns = ConcurrentHashMap<Long, String>()
+    // In-memory set of finished run IDs to ensure finishRun terminal block idempotence
+    private val completedRunIds = ConcurrentHashMap.newKeySet<String>()
+
+    @Synchronized
+    fun getActiveRunId(jobId: Long): String? = activeRuns[jobId]
 
     private fun getLogsDir(context: Context): File {
         val dir = File(context.filesDir, LOGS_DIR_NAME)
@@ -117,6 +122,10 @@ object RunLogger {
     @Synchronized
     fun finishRun(context: Context, jobId: Long, status: String, summary: String) {
         val runId = activeRuns[jobId] ?: return
+        if (!completedRunIds.add(runId)) {
+            // Terminal block already written for this run, do not log again
+            return
+        }
         val now = System.currentTimeMillis()
         val tag = "FINISH"
         val message = "Run finished with status: $status | $summary"
@@ -128,10 +137,12 @@ object RunLogger {
             val logFile = File(dir, "$runId.log")
             if (logFile.exists()) {
                 val currentText = logFile.readText()
-                val updatedText = currentText
-                    .replaceFirst("Status:     RUNNING", "Status:     $status")
-                    .plus("\n[${timeOnlyFormat.format(Date(now))}] [COMPLETE] $summary\n")
-                logFile.writeText(updatedText)
+                if (!currentText.contains("[COMPLETE]")) {
+                    val updatedText = currentText
+                        .replaceFirst("Status:     RUNNING", "Status:     $status")
+                        .plus("\n[${timeOnlyFormat.format(Date(now))}] [COMPLETE] $summary\n")
+                    logFile.writeText(updatedText)
+                }
             }
             pruneLogs(context)
         } catch (e: Exception) {
@@ -217,6 +228,7 @@ object RunLogger {
             val dir = getLogsDir(context)
             dir.listFiles()?.forEach { it.delete() }
             activeRuns.clear()
+            completedRunIds.clear()
         } catch (e: Exception) {
             // Ignore
         }

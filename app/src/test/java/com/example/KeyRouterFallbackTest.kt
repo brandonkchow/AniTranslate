@@ -295,4 +295,25 @@ class KeyRouterFallbackTest {
         assertNotNull("Slot with unknown model absent from catalog must report RETIRED_MODEL", groqExclusion)
         assertEquals(com.example.pipeline.router.ExclusionReason.RETIRED_MODEL, groqExclusion!!.reason)
     }
+
+    @Test
+    fun executeWithSlotEnforcesAttemptTimeoutBound() = runBlocking {
+        val gemini = enableTranslateSlot(ApiProvider.GEMINI, "key-gemini")
+
+        val startTime = System.currentTimeMillis()
+        val result = router.executeWithSlot<String>(
+            stage = PipelineStage.TRANSLATE,
+            slot = gemini,
+            timeoutMs = 150L
+        ) {
+            kotlinx.coroutines.delay(1000L)
+            Result.success("finished")
+        }
+        val elapsed = System.currentTimeMillis() - startTime
+
+        assertTrue("Execution should fail due to timeout", result.isFailure)
+        val ex = result.exceptionOrNull()
+        assertTrue("Exception should be TimeoutException, got $ex", ex is java.util.concurrent.TimeoutException)
+        assertTrue("Elapsed time ($elapsed ms) should be bounded well below block duration (1000 ms)", elapsed < 800L)
+    }
 }

@@ -142,4 +142,22 @@ class RunLoggerAndZipTest {
         assertTrue("Exported ZIP file must exist", exportedZip!!.exists())
         assertTrue("Exported ZIP file must be > 0 bytes", exportedZip.length() > 0)
     }
+
+    @Test
+    fun testFinishRunIdempotentWhenCalledTwice() {
+        val jobId = 18L
+        val runId = RunLogger.startRun(application, jobId, 4, "Job started or resumed")
+        RunLogger.logPageEvent(application, jobId, 0, "DETECT_START", "Detecting with Gemini")
+
+        // Call finishRun twice in rapid succession
+        RunLogger.finishRun(application, jobId, "PARTIAL_SUCCESS", "1 done, 3 failed out of 4 pages")
+        RunLogger.finishRun(application, jobId, "PARTIAL_SUCCESS", "1 done, 3 failed out of 4 pages")
+
+        val content = RunLogger.getRunLogContent(application, runId)
+        val finishCount = Regex("""\[FINISH]""").findAll(content).count()
+        val completeCount = Regex("""\[COMPLETE]""").findAll(content).count()
+
+        assertEquals("Terminal [FINISH] block must be written exactly once", 1, finishCount)
+        assertEquals("Terminal [COMPLETE] block must be written exactly once", 1, completeCount)
+    }
 }
