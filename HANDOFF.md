@@ -535,9 +535,16 @@ The wall is *outside* the mask: the model segments the bubble's interior, not it
 what makes "ink inside the measured interior is text" safe to assert — the stroke cannot be promoted,
 because it is not in the mask being promoted from.
 
-**The repair direction, predicted before the change and matching the census exactly:** box 7's erase
-*shrinks* by 1,257 px (3,004 planned → 1,747 inside the bubble; that difference is the wall it was
-eating), and box 8's *grows* by 1,065 px (913 → 1,978; that is うええ promoted instead of exempted).
+**The repair direction, predicted before the change, and one item of it was wrong.** Box 8's erase
+*grows* by 1,065 px (913 planned → 1,978 inside the bubble): that is `うええ` promoted instead of
+exempted, and it is the real defect. Box 7's erase *shrinks* by 1,257 px (3,004 → 1,747), and the
+earlier reading of that number — "the wall it was eating" — **is contradicted by two independent
+checks**: the harness reports `wallBefore == wallSurvived` for all nine boxes, and an `agy`
+inspection of `box7_diag.png` found **no over-wipe at all** (hair, collar, halftone and the bubble
+outline intact; every changed pixel accounted for as lettering or off-white paper normalisation). The
+1,257 px is paper and antialiased boundary, not artwork. The measured interior still tightens box 7 —
+it can only shrink the paint set — but that is defence in depth, and it must not be written up as a
+repair.
 
 **What landed.** `plan()` takes an optional `bubbleMask`. It is folded into `boxMask` itself rather
 than consulted separately, so every gate downstream — the ink candidates, the erase bounds, the
