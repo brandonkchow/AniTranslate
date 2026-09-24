@@ -1,5 +1,6 @@
 package com.example
 
+import com.example.data.models.Bubble
 import com.example.pipeline.wipe.BubbleInkMask
 import com.example.pipeline.wipe.BubbleInterior
 import com.example.pipeline.wipe.EnclosedInterior
@@ -86,6 +87,13 @@ class WiperHarnessTest {
         val leftoverCensus = mutableListOf<String>()
 
         for ((index, box) in parseBoxes(boxesSpec!!).withIndex()) {
+            // Mirrors FlatWiper: non-balloon text is out of scope and left exactly as drawn, so
+            // there is nothing to assert about it here.
+            if (box.type.lowercase() in Bubble.NON_BALLOON_TYPES) {
+                println("[harness] box ${index + 1} (${box.type}) skipped: non-balloon text is not wiped")
+                continue
+            }
+
             val left = (box.x1 * width).toInt().coerceIn(0, width - 1)
             val top = (box.y1 * height).toInt().coerceIn(0, height - 1)
             val right = (box.x2 * width).toInt().coerceIn(left + 1, width)
@@ -94,7 +102,7 @@ class WiperHarnessTest {
             val boxW = right - left
             val boxH = bottom - top
 
-            val enc = enclosureMap.findEnclosureForBoxCenter(listOf(box.x1, box.y1, box.x2, box.y2))
+            val enc = enclosureMap.findEnclosureForBox(listOf(box.x1, box.y1, box.x2, box.y2))
             val effLeft = if (enc != null) minOf(left, enc.pixelBounds[0]) else left
             val effTop = if (enc != null) minOf(top, enc.pixelBounds[1]) else top
             val effRight = if (enc != null) maxOf(right, enc.pixelBounds[2]) else right
@@ -110,11 +118,7 @@ class WiperHarnessTest {
 
             // Widen the measurement region by the same margin FlatWiper uses, so the harness
             // exercises the shipping path instead of a narrower one the phone never runs.
-            val margin = if (box.type.lowercase() in setOf("floating", "side_text")) {
-                0
-            } else {
-                EnclosedInterior.measurementMargin(effRight - effLeft, effBottom - effTop)
-            }
+            val margin = EnclosedInterior.measurementMargin(effRight - effLeft, effBottom - effTop)
             val regionLeft = (effLeft - margin).coerceAtLeast(0)
             val regionTop = (effTop - margin).coerceAtLeast(0)
             val regionRight = (effRight + margin).coerceAtMost(width)
@@ -371,7 +375,7 @@ class WiperHarnessTest {
 
         // For Job 13, assert zero visible residual inside the formerly-surviving region (lower lobe 0.613..0.743)
         if (pagePath!!.contains("13")) {
-            val box4Enclosure = enclosureMap.findEnclosureForBoxCenter(listOf(0.347f, 0.511f, 0.500f, 0.613f))
+            val box4Enclosure = enclosureMap.findEnclosureForBox(listOf(0.347f, 0.511f, 0.500f, 0.613f))
             org.junit.Assert.assertNotNull("box 4 must find an enclosure", box4Enclosure)
             val ry1 = (0.613f * height).toInt()
             val ry2 = (0.743f * height).toInt()

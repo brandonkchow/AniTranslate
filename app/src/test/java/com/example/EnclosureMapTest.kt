@@ -66,12 +66,12 @@ class EnclosureMapTest {
         // Check box inside bubble
         val insideBox = listOf(35f / w, 35f / h, 45f / w, 45f / h)
         assertTrue(enc.containsCenter(insideBox))
-        assertNotNull(map.findEnclosureForBoxCenter(insideBox))
+        assertNotNull(map.findEnclosureForBox(insideBox))
 
         // Check box outside bubble (in panel art or border)
         val outsideBox = listOf(10f / w, 10f / h, 20f / w, 20f / h)
         assertFalse(enc.containsCenter(outsideBox))
-        assertNull(map.findEnclosureForBoxCenter(outsideBox))
+        assertNull(map.findEnclosureForBox(outsideBox))
 
         // Wall stroke pixels must not be part of the enclosure interior
         for (y in 10 until 70) {
@@ -130,7 +130,7 @@ class EnclosureMapTest {
 
         // Box covering only upper lobe should match this enclosure
         val upperBox = listOf(40f / w, 35f / h, 60f / w, 55f / h)
-        val matchedEnc = map.findEnclosureForBoxCenter(upperBox)
+        val matchedEnc = map.findEnclosureForBox(upperBox)
         assertNotNull(matchedEnc)
         assertEquals(enc.id, matchedEnc!!.id)
     }

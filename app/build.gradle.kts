@@ -90,6 +90,15 @@ tasks.withType<Test>().configureEach {
     providers.gradleProperty("harness.out").orNull?.let { systemProperty("harness.out", it) }
     testLogging { showStandardStreams = true }
   }
+
+  // Same mechanism for the real-wiper page run (`-Preal.page=...`), which drives FlatWiper itself
+  // instead of a copy of it.
+  providers.gradleProperty("real.page").orNull?.let {
+    systemProperty("real.page", it)
+    providers.gradleProperty("real.boxes").orNull?.let { b -> systemProperty("real.boxes", b) }
+    providers.gradleProperty("real.out").orNull?.let { o -> systemProperty("real.out", o) }
+    testLogging { showStandardStreams = true }
+  }
 }
 
 // Some unused dependencies are commented out below instead of being removed.

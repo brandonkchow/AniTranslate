@@ -1,5 +1,6 @@
 package com.example.pipeline.wipe
 
+import kotlin.math.ceil
 import kotlin.math.max
 
 /**
@@ -60,45 +61,113 @@ class EnclosureMap private constructor(
      * Look up the enclosure covering the normalized page coordinate `(normX, normY)`.
      */
     fun findEnclosureAt(normX: Float, normY: Float): Enclosure? {
-        if (normX !in 0f..1f || normY !in 0f..1f) return null
+        val id = enclosureIdAt(normX, normY)
+        return if (id > 0) enclosures[id - 1] else null
+    }
+
+    /** The enclosure id covering `(normX, normY)`, or `0` when the point is outside every one. */
+    private fun enclosureIdAt(normX: Float, normY: Float): Int {
+        if (normX !in 0f..1f || normY !in 0f..1f) return 0
         val px = (normX * width).toInt().coerceIn(0, width - 1)
         val py = (normY * height).toInt().coerceIn(0, height - 1)
         val id = enclosureIds[py * width + px]
-        return if (id > 0 && id <= enclosures.size) enclosures[id - 1] else null
+        return if (id > 0 && id <= enclosures.size) id else 0
     }
 
     /**
-     * Find the enclosure covering the center of the normalized `[x1, y1, x2, y2]` box, but only
-     * when the enclosure is a plausible interior *for this box*. Two conditions:
+     * Find the enclosure that owns the normalized `[x1, y1, x2, y2]` box.
      *
-     * 1. **Direct hit:** the box's center itself must lie inside the enclosure. A center that
-     *    landed on artwork or between bubbles must NOT adopt a neighbouring bubble's interior
-     *    (a spiral search would do exactly that, wiping text that belongs to no box), so there
-     *    is deliberately no fallback scan here.
-     * 2. **Scale:** the enclosure's area must not exceed the box area by more than
-     *    [maxScaleRatio]. A merged two-lobe balloon legitimately dwarfs a one-lobe detector box
-     *    (the job-13 case this map exists for), but a page-background enclosure is an order of
-     *    magnitude larger than any box. This is what stops the wipe from flooding artwork.
+     * The box's own center is not a trustworthy probe, and treating it as one produced both field
+     * symptoms at once. A detector box regularly has a center that lands on a glyph stroke, on bold
+     * effect lettering, or on artwork the box merely overlaps. A single-pixel miss dropped the
+     * caller onto its box-only fallback, which then:
      *
-     * Enclosures failing either check return null and the caller falls back to box-only
-     * behaviour, exactly as if no enclosure had been measured.
+     * - wiped lettering *anywhere* inside the box, erasing an effect the box happened to overlap
+     *   (the over-wipe); and
+     * - could never reach this balloon's own text that fell outside a tight box, so it survived
+     *   (the miss).
+     *
+     * Step 1 is the box centre, resolved exactly as this lookup always resolved it. Only when the
+     * centre settles nothing — it landed on ink, on a wall, or outside every balloon — does the
+     * whole box vote: a grid of probes is sampled across its interior and the enclosure holding a
+     * plurality is adopted, provided:
+     *
+     * 1. **Coverage:** the winner holds at least [MIN_VOTE_SHARE] of the probes, so the box is
+     *    genuinely inside this balloon rather than merely grazing it. A box that mostly sits on
+     *    artwork or in a neighbouring bubble stays majority outside and adopts nothing — which is
+     *    what a fallback scan used to get wrong.
+     * 2. **Scale:** the enclosure's area must not exceed the box area by more than [maxScaleRatio].
+     *    A merged two-lobe balloon legitimately dwarfs a one-lobe detector box (the job-13 case this
+     *    map exists for), but a page-background enclosure is an order of magnitude larger than any
+     *    box. This is what stops the wipe from flooding artwork.
+     *
+     * Enclosures failing either check return null and the caller falls back to box-only behaviour,
+     * exactly as if no enclosure had been measured.
+     *
+     * Because step 1 is evaluated first and unchanged, the vote can only ever *add* adoptions: any
+     * box that used to adopt its balloon still adopts the very same one, and the vote only rescues
+     * the boxes whose centre happened to settle on a stroke.
      */
-    fun findEnclosureForBoxCenter(box: List<Float>, maxScaleRatio: Float = 12f): Enclosure? {
+    fun findEnclosureForBox(box: List<Float>, maxScaleRatio: Float = 12f): Enclosure? {
         if (box.size < 4) return null
-        val cx = (box[0] + box[2]) * 0.5f
-        val cy = (box[1] + box[3]) * 0.5f
-        val found = findEnclosureAt(cx, cy) ?: return null
+        val left = minOf(box[0], box[2])
+        val top = minOf(box[1], box[3])
+        val right = maxOf(box[0], box[2])
+        val bottom = maxOf(box[1], box[3])
+        val bw = (right - left).coerceAtLeast(1e-4f)
+        val bh = (bottom - top).coerceAtLeast(1e-4f)
 
-        val bw = (box[2] - box[0]).coerceAtLeast(1e-4f)
-        val bh = (box[3] - box[1]).coerceAtLeast(1e-4f)
-        val boxArea = bw * bh
-        val scaleOk = found.area.toFloat() / (boxArea * width * height) <= maxScaleRatio
+        // 1. The box centre, resolved exactly as this lookup has always resolved it. A box that used
+        //    to adopt its balloon through its centre still adopts that same balloon, so the vote can
+        //    only add adoptions — never take one away, which is what an earlier version of this
+        //    change did by replacing the centre probe outright (it left text unerased on page 16).
+        val centreHit = enclosureIdAt(left + bw / 2f, top + bh / 2f)
+        if (centreHit > 0) {
+            val found = enclosures.getOrNull(centreHit - 1)
+            if (found != null && found.area.toFloat() / (bw * bh * width * height) <= maxScaleRatio) {
+                return found
+            }
+        }
+
+        // 2. The centre settled nothing. Probe cell centers, so no probe sits on the box's own edge — which is exactly where a
+        // tight detector box runs into the wall, into the tail, or into whatever it overlaps.
+        val votes = HashMap<Int, Int>()
+        var probes = 0
+        for (row in 0 until VOTE_GRID) {
+            for (col in 0 until VOTE_GRID) {
+                val nx = left + bw * ((col + 0.5f) / VOTE_GRID)
+                val ny = top + bh * ((row + 0.5f) / VOTE_GRID)
+                probes++
+                val id = enclosureIdAt(nx, ny)
+                if (id > 0) votes[id] = (votes[id] ?: 0) + 1
+            }
+        }
+        if (probes == 0) return null
+        val winner = votes.maxByOrNull { it.value } ?: return null
+        val needed = maxOf(MIN_VOTE_COUNT, ceil(probes * MIN_VOTE_SHARE).toInt())
+        if (winner.value < needed) return null
+
+        val found = enclosures.getOrNull(winner.key - 1) ?: return null
+        val scaleOk = found.area.toFloat() / (bw * bh * width * height) <= maxScaleRatio
         return if (scaleOk) found else null
     }
 
     companion object {
         /** Minimum paper pixels for a connected component to qualify as a candidate bubble. */
         private const val MIN_ENCLOSURE_PAPER = 200
+
+        /** Probes per axis used to decide which enclosure owns a detector box: [VOTE_GRID]² total. */
+        private const val VOTE_GRID = 7
+
+        /**
+         * Share of a box's probes that must land in one enclosure before it is adopted. The box is
+         * an approximation of the balloon, so a clear majority is a strong claim; a box that merely
+         * overlaps a balloon stays a minority there and adopts nothing.
+         */
+        private const val MIN_VOTE_SHARE = 0.45f
+
+        /** Absolute floor on winning votes, so a small box is never adopted on one or two probes. */
+        private const val MIN_VOTE_COUNT = 4
 
         /** Minimum ink pixels inside an enclosure to qualify as text-bearing bubble. */
         private const val MIN_TEXT_INK = 10

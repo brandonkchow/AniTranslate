@@ -1,14 +1,10 @@
 package com.example.pipeline.wipe
 
 import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.graphics.Paint
-import android.graphics.RectF
 import com.example.data.models.Bubble
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.math.max
-import kotlin.math.min
 
 /**
  * Erases the source text inside each bubble so translated text can be laid over it.
@@ -20,20 +16,11 @@ import kotlin.math.min
  */
 object FlatWiper {
 
-    /** Bubble types whose text sits directly on artwork: there is no wall to find or protect. */
-    private val WALL_LESS_TYPES = setOf("floating", "side_text")
-
-    private fun hasWall(bubbleType: String) = bubbleType.lowercase() !in WALL_LESS_TYPES
-
     suspend fun wipeBubbles(
         sourceBitmap: Bitmap,
         bubbles: List<Bubble>
     ): Bitmap = withContext(Dispatchers.Default) {
         val resultBitmap = sourceBitmap.copy(Bitmap.Config.ARGB_8888, true)
-        val canvas = Canvas(resultBitmap)
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.FILL
-        }
 
         val bmpWidth = sourceBitmap.width
         val bmpHeight = sourceBitmap.height
@@ -52,6 +39,13 @@ object FlatWiper {
 
         for (bubble in bubbles) {
             if (!bubble.visible) continue
+
+            // Balloon interiors only. Text that sits on artwork — effects, onomatopoeia, signage,
+            // captions — is left exactly as drawn: it has no uniform background to repaint it
+            // with, and no wall to bound a wipe, so any attempt smudges the line art underneath.
+            // A region the merger reclassified into a *measured* enclosure arrives here typed
+            // "bubble", so wall-less dialogue that is genuinely inside a balloon still wipes.
+            if (bubble.isNonBalloon) continue
 
             val leftPx = (bubble.x1 * bmpWidth).toInt().coerceIn(0, bmpWidth - 1)
             val topPx = (bubble.y1 * bmpHeight).toInt().coerceIn(0, bmpHeight - 1)
@@ -79,13 +73,10 @@ object FlatWiper {
             // A walled bubble is measured over a margin-widened region. A detection box is tight by
             // construction, so the stroke is frequently clipped by its own edge and can no longer be
             // recognised as a wall that closes. The widening is for that measurement alone: the fill
-            // colour and the fallback inset above, and the box the shape fallback draws into below,
-            // all stay on the detector's own box.
-            val margin = if (hasWall(bubble.type)) {
-                EnclosedInterior.measurementMargin(boxW, boxH)
-            } else {
-                0
-            }
+            // colour and the wall-inset estimate above are taken from the detector's own box, and the
+            // plan's frame below is still that box, so a widened measurement can never widen the
+            // region that gets repainted.
+            val margin = EnclosedInterior.measurementMargin(boxW, boxH)
             val regionLeft = (leftPx - margin).coerceAtLeast(0)
             val regionTop = (topPx - margin).coerceAtLeast(0)
             val regionRight = (rightPx + margin).coerceAtMost(bmpWidth)
@@ -96,12 +87,13 @@ object FlatWiper {
             val pixels = IntArray(regionW * regionH)
             resultBitmap.getPixels(pixels, 0, regionW, regionLeft, regionTop, regionW, regionH)
 
-            // The enclosure covering this box's centre, if any, lifted into region coordinates.
-            // Supplied as the plan's measured interior: ink inside it is text by construction, so
-            // the wipe may reach past the detector's rectangle — but never past this mask, which
-            // ends at the wall. A box whose centre fell on artwork or between lobes wipes exactly
-            // as before, on the box alone.
-            val enclosure = enclosureMap.findEnclosureForBoxCenter(
+            // The enclosure that owns this box, if any, lifted into region coordinates. Supplied as
+            // the plan's measured interior: ink inside it is text by construction, so the wipe may
+            // reach past the detector's rectangle — but never past this mask, which ends at the
+            // wall. A box that mostly sits on artwork or in a neighbouring bubble adopts nothing, and
+            // the plan then falls back to the interior it measures for itself — never to the box, and
+            // never to a fitted shape, so nothing outside a measured interior can be repainted.
+            val enclosure = enclosureMap.findEnclosureForBox(
                 listOf(bubble.x1, bubble.y1, bubble.x2, bubble.y2)
             )
             val bubbleMask: BooleanArray? = enclosure?.let { enc ->
@@ -130,75 +122,19 @@ object FlatWiper {
                 bubbleMask
             )
 
-            if (plan.usedInkMask) {
-                // Preferred: repaint only the text, leaving the wall, tail and artwork intact.
-                BubbleInkMask.apply(pixels, plan.wipe, sampledColor)
-                resultBitmap.setPixels(pixels, 0, regionW, regionLeft, regionTop, regionW, regionH)
-            } else {
-                // Nothing readable in there — fall back to wiping a shape.
-                paint.color = sampledColor
-                drawShapeWipe(
-                    canvas = canvas,
-                    paint = paint,
-                    bubbleType = bubble.type,
-                    shape = shape,
-                    leftPx = leftPx,
-                    topPx = topPx,
-                    rightPx = rightPx,
-                    bottomPx = bottomPx,
-                    wallInset = plan.wallInset,
-                    densityScale = densityScale
-                )
-            }
+            // Either the plan classified lettering and returns the pixels to repaint (`wipe`), or it
+            // found nothing readable and returns the interior it measured instead (`interior`) so
+            // that half-erased lettering is still cleared.
+            //
+            // The second case used to paint a *fitted oval over the whole detector box*, throwing
+            // away the mask the plan had just measured. A box is routinely larger than the balloon
+            // it belongs to and can straddle artwork, so that oval reached past the wall and erased
+            // the effects and line art around it. A measured interior cannot do that: it is the
+            // region the image itself closes, and it ends at the stroke by construction.
+            BubbleInkMask.apply(pixels, if (plan.usedInkMask) plan.wipe else plan.interior, sampledColor)
+            resultBitmap.setPixels(pixels, 0, regionW, regionLeft, regionTop, regionW, regionH)
         }
 
         resultBitmap
-    }
-
-    private fun drawShapeWipe(
-        canvas: Canvas,
-        paint: Paint,
-        bubbleType: String,
-        shape: BubbleInterior.Shape,
-        leftPx: Int,
-        topPx: Int,
-        rightPx: Int,
-        bottomPx: Int,
-        wallInset: Int,
-        densityScale: Float
-    ) {
-        if (!hasWall(bubbleType)) {
-            // Text directly over artwork: no wall to protect, so the whole region goes.
-            val rectF = RectF(
-                leftPx.toFloat(),
-                topPx.toFloat(),
-                rightPx.toFloat(),
-                bottomPx.toFloat()
-            )
-            val cornerRadius = 6f * densityScale
-            canvas.drawRoundRect(rectF, cornerRadius, cornerRadius, paint)
-            return
-        }
-
-        val rectF = RectF(
-            (leftPx + wallInset).toFloat(),
-            (topPx + wallInset).toFloat(),
-            (rightPx - wallInset).toFloat(),
-            (bottomPx - wallInset).toFloat()
-        )
-        when (shape) {
-            // Narration box with a minimal inset.
-            BubbleInterior.Shape.RECT -> {
-                val cornerRadius = 3f * densityScale
-                canvas.drawRoundRect(rectF, cornerRadius, cornerRadius, paint)
-            }
-            // Circular / oval speech bubble, sitting inside its wall.
-            BubbleInterior.Shape.ELLIPSE -> canvas.drawOval(rectF, paint)
-            // Elongated or panel-shaped region.
-            BubbleInterior.Shape.ROUNDED_RECT -> {
-                val cornerRadius = min(rectF.width(), rectF.height()) * 0.25f
-                canvas.drawRoundRect(rectF, cornerRadius, cornerRadius, paint)
-            }
-        }
     }
 }

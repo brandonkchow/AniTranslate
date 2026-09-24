@@ -16,3 +16,7 @@
 local.properties
 .env
 debug.keystore
+
+# Device pull-downs used to reproduce field reports (pages, sidecars, run logs, app DB).
+# Kept on disk for forensics; never committed — large binaries and a device database.
+/artifacts-phone/

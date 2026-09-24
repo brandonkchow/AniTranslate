@@ -33,6 +33,13 @@ object Typesetter {
 
         for (bubble in bubbles) {
             if (!bubble.visible) continue
+
+            // Non-balloon text is left untranslated: the wiper deliberately keeps the source text
+            // (there is no uniform background to restore it against), and painting English over
+            // kept Japanese effects is worse than no translation at all. A wall-less region the
+            // merger reclassified into a measured enclosure arrives here as "bubble".
+            if (bubble.isNonBalloon) continue
+
             val rawText = bubble.translated.ifBlank { bubble.text }
             if (rawText.isBlank()) continue
 
