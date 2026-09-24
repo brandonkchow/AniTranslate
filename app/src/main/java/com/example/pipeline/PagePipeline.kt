@@ -6,8 +6,10 @@ import com.example.data.db.PageStatus
 import com.example.data.models.Bubble
 import com.example.data.slots.ApiProvider
 import com.example.data.slots.ApiSlot
+import com.example.data.slots.ModelCatalogRefresher
 import com.example.data.slots.ModelCatalogStore
 import com.example.data.slots.ModelFilter
+import com.example.data.slots.ModelWalk
 import com.example.data.slots.SlotStorage
 import com.example.net.ApiException
 import com.example.net.GeminiClient
@@ -55,6 +57,12 @@ class PagePipeline(
         onStatusUpdate: suspend (PageEntity) -> Unit
     ): PageEntity = withContext(Dispatchers.IO) {
         var currentPage = page
+
+        // Keep the free-model walk supplied. Without this the catalogue is never fetched, so the
+        // walk silently collapses to the pinned model alone. Never throws: a failed refresh leaves
+        // the previous cache in place and the page still runs.
+        ModelCatalogRefresher.refreshIfStale(catalogStore, slotStorage.slots.value)
+
         val catalog = catalogStore.load()
 
         // Emit ONE exclusion summary per job
@@ -204,7 +212,13 @@ class PagePipeline(
             var detectSlot: ApiSlot? = null
             var totalDetectAttempts = 0
 
-            val standbyVisionModels = ModelFilter.rank(ModelFilter.usable(catalog, needVision = true))
+            // Standby walk, gated by the same explicit switch: with the walk off on every slot,
+            // nothing walks — including this cross-provider free-vision fallback.
+            val standbyVisionModels = if (ModelWalk.isWalkingAnywhere(slotStorage.slots.value)) {
+                ModelWalk.standbyModels(catalog)
+            } else {
+                emptyList()
+            }
 
             while (!detectSucceeded && totalDetectAttempts < maxAttempts) {
                 val (slot, waitTime) = keyRouter.getAvailableSlot(PipelineStage.DETECT_OCR, attemptedDetectSlotIds)
@@ -544,7 +558,16 @@ class PagePipeline(
             var translationSucceeded = false
             var totalTranslateAttempts = 0
 
-            while (!translationSucceeded && totalTranslateAttempts < maxAttempts) {
+            // A walking slot is capped at MAX_TRANSLATE_SLOT_ATTEMPTS internally, so the page budget has
+            // to cover every slot the user configured. A flat 3-request budget let the early slots spend
+            // it and OpenRouter was never reached — which read as a broken walk but was starvation.
+            val translateBudget = ModelWalk.translateBudget(
+                enabledSlots = slotStorage.slots.value.count { it.enabled },
+                floor = maxAttempts,
+                perSlotCap = MAX_TRANSLATE_SLOT_ATTEMPTS
+            )
+
+            while (!translationSucceeded && totalTranslateAttempts < translateBudget) {
                 val (slot, waitTime) = keyRouter.getAvailableSlot(PipelineStage.TRANSLATE, attemptedSlotIds)
                 if (slot == null) {
                     val waitUntil = waitTime ?: (System.currentTimeMillis() + 15000L)
@@ -566,17 +589,16 @@ class PagePipeline(
                 attemptedSlotIds.add(slot.id)
 
                 // Build candidate model list for this slot: pinned model first, then catalog free models
-                val providerCatalog = catalog.filter { it.providerId.equals(slot.provider.name, ignoreCase = true) }
-                val usableCatalog = ModelFilter.usable(providerCatalog, needVision = false)
-                val rankedCatalog = ModelFilter.rank(usableCatalog, pinned = listOf(slot.model))
-                val candidateModels = (listOf(slot.model) + rankedCatalog.map { it.id }).distinct()
+                // One source of truth with the Settings UI, honouring the explicit per-slot walk switch.
+                val plan = ModelWalk.planFor(slot, catalog, needVision = false)
+                val candidateModels = plan.all
 
                 if (slot.provider == ApiProvider.OPENROUTER) {
-                    // OpenRouter fails over provider-side with models array (cap 4 entries)
+                    // OpenRouter fails over provider-side with a models array (cap 4 entries)
                     totalTranslateAttempts++
-                    val fallbackModels = candidateModels.filter { it != slot.model }.take(3)
+                    val fallbackModels = plan.providerSideFallbacks()
                     currentPage = currentPage.copy(activeSlotName = slot.displayTitle)
-                    val attemptSuffix = if (totalTranslateAttempts > 1) " (fallback attempt $totalTranslateAttempts/$maxAttempts)" else ""
+                    val attemptSuffix = if (totalTranslateAttempts > 1) " (fallback attempt $totalTranslateAttempts/$translateBudget)" else ""
                     RunLogger.logPageEvent(
                         context, currentPage.jobId, currentPage.pageIndex, "TRANSLATE_START",
                         "Translating ${bubbles.size} bubbles with ${slot.displayTitle} (${slot.model})$attemptSuffix"
@@ -601,7 +623,7 @@ class PagePipeline(
                         attemptedSlotNotes += "${slot.displayTitle} [${errorInfo.eventTag}]"
                         RunLogger.logPageEvent(
                             context, currentPage.jobId, currentPage.pageIndex, errorInfo.eventTag,
-                            "${errorInfo.userMessage} (${elapsedMs}ms) — slot \"${slot.displayTitle}\" (${slot.model}), attempt $totalTranslateAttempts/$maxAttempts"
+                            "${errorInfo.userMessage} (${elapsedMs}ms) — slot \"${slot.displayTitle}\" (${slot.model}), attempt $totalTranslateAttempts/$translateBudget"
                         )
                         continue
                     }
@@ -625,12 +647,16 @@ class PagePipeline(
                     onStatusUpdate(currentPage)
                     translationSucceeded = true
                 } else {
-                    // Walk candidate models for this slot
+                    // Walk candidate models for this slot, capped so one slot cannot monopolise the page
+                    // budget — the slots behind it must still get their turn.
+                    var slotAttempts = 0
                     for (candidateModel in candidateModels) {
-                        if (totalTranslateAttempts >= maxAttempts) break
+                        if (totalTranslateAttempts >= translateBudget) break
+                        if (slotAttempts >= MAX_TRANSLATE_SLOT_ATTEMPTS) break
+                        slotAttempts++
                         totalTranslateAttempts++
                         currentPage = currentPage.copy(activeSlotName = "${slot.displayTitle} ($candidateModel)")
-                        val attemptSuffix = if (totalTranslateAttempts > 1) " (fallback attempt $totalTranslateAttempts/$maxAttempts)" else ""
+                        val attemptSuffix = if (totalTranslateAttempts > 1) " (fallback attempt $totalTranslateAttempts/$translateBudget)" else ""
                         RunLogger.logPageEvent(
                             context, currentPage.jobId, currentPage.pageIndex, "TRANSLATE_START",
                             "Translating ${bubbles.size} bubbles with ${slot.displayTitle} ($candidateModel)$attemptSuffix"
@@ -653,7 +679,7 @@ class PagePipeline(
                             attemptedSlotNotes += "${slot.displayTitle}:$candidateModel [${errorInfo.eventTag}]"
                             RunLogger.logPageEvent(
                                 context, currentPage.jobId, currentPage.pageIndex, errorInfo.eventTag,
-                                "${errorInfo.userMessage} (${elapsedMs}ms) — slot \"${slot.displayTitle}\" ($candidateModel), attempt $totalTranslateAttempts/$maxAttempts"
+                                "${errorInfo.userMessage} (${elapsedMs}ms) — slot \"${slot.displayTitle}\" ($candidateModel), attempt $totalTranslateAttempts/$translateBudget"
                             )
                             if (errorInfo.isRateLimit || errorInfo.eventTag == "AUTH_FAIL") {
                                 break

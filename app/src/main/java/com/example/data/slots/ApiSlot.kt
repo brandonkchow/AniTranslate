@@ -79,10 +79,10 @@ enum class ApiProvider(
     }
 }
 
-enum class SlotRole(val displayName: String) {
-    DETECT_OCR("Detect+OCR"),
-    TRANSLATE("Translate"),
-    ANY("Any");
+enum class SlotRole(val displayName: String, val description: String) {
+    DETECT_OCR("Reads the page", "Vision + OCR: looks at the artwork and reads the text on it."),
+    TRANSLATE("Translates only", "Text only: translates text it is handed, and cannot see the page."),
+    ANY("Does both", "Vision + translation: reads the page and translates the text.");
 
     companion object {
         fun fromString(value: String): SlotRole {
@@ -103,7 +103,12 @@ data class ApiSlot(
     val isInvalidKey: Boolean = false,
     val cooldownUntilEpochMs: Long = 0L,
     val consecutiveRateLimits: Int = 0,
-    val isModelRetired: Boolean = false
+    val isModelRetired: Boolean = false,
+    /**
+     * Explicit user switch, surfaced in Settings. When set, this slot may also try other free models
+     * from its provider's live catalogue; when cleared it tries only [model], the model you chose.
+     */
+    val walkFreeModels: Boolean = true
 ) {
     val displayTitle: String
         get() = if (label.isNotBlank()) label else "${provider.displayName} ($model)"
@@ -134,6 +139,7 @@ data class ApiSlot(
             put("cooldownUntilEpochMs", cooldownUntilEpochMs)
             put("consecutiveRateLimits", consecutiveRateLimits)
             put("isModelRetired", isModelRetired)
+            put("walkFreeModels", walkFreeModels)
         }
     }
 
@@ -153,7 +159,8 @@ data class ApiSlot(
                 isInvalidKey = json.optBoolean("isInvalidKey", false),
                 cooldownUntilEpochMs = json.optLong("cooldownUntilEpochMs", 0L),
                 consecutiveRateLimits = json.optInt("consecutiveRateLimits", 0),
-                isModelRetired = json.optBoolean("isModelRetired", false)
+                isModelRetired = json.optBoolean("isModelRetired", false),
+                walkFreeModels = json.optBoolean("walkFreeModels", true)
             )
         }
     }

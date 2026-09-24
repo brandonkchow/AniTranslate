@@ -95,6 +95,9 @@ import android.widget.Toast
 import com.example.ui.components.GeminiUsageDashboard
 import com.example.data.slots.ApiProvider
 import com.example.data.slots.ApiSlot
+import com.example.data.slots.CatalogModel
+import com.example.data.slots.ModelCapability
+import com.example.data.slots.ModelWalk
 import com.example.data.slots.SlotRole
 import com.example.utils.RunLogEntry
 import com.example.ui.theme.EditorialAmber
@@ -311,6 +314,9 @@ fun SettingsScreen(
                         index = index,
                         totalSlots = uiState.slots.size,
                         testResult = testResults[slot.id],
+                        catalog = uiState.catalog,
+                        isRefreshingCatalog = uiState.isRefreshingCatalog,
+                        onRefreshCatalog = { viewModel.refreshCatalog() },
                         onUpdate = { updated -> viewModel.updateSlot(updated) },
                         onDelete = { viewModel.deleteSlot(slot.id) },
                         onMoveUp = { viewModel.moveSlot(index, index - 1) },
@@ -777,6 +783,9 @@ fun ApiSlotCard(
     index: Int,
     totalSlots: Int,
     testResult: SlotTestResult?,
+    catalog: List<CatalogModel>,
+    isRefreshingCatalog: Boolean,
+    onRefreshCatalog: () -> Unit,
     onUpdate: (ApiSlot) -> Unit,
     onDelete: () -> Unit,
     onMoveUp: () -> Unit,
@@ -906,7 +915,7 @@ fun ApiSlotCard(
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Text(
-                        text = "Model: ${slot.model}",
+                        text = "Model: ${slot.model}  |  ${ModelWalk.capabilityOf(slot.model, catalog).label}",
                         style = MaterialTheme.typography.bodySmall,
                         color = EditorialTextMuted,
                         maxLines = 1,
@@ -1121,7 +1130,9 @@ fun ApiSlotCard(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         SlotRole.entries.forEach { role ->
-                            val isSupported = (role != SlotRole.DETECT_OCR && role != SlotRole.ANY) || slot.isVisionSupported
+                            val isSupported = (role != SlotRole.DETECT_OCR && role != SlotRole.ANY) ||
+                                slot.isVisionSupported ||
+                                ModelWalk.capabilityOf(slot.model, catalog) == ModelCapability.VISION_AND_TEXT
                             FilterChip(
                                 selected = slot.role == role,
                                 onClick = { if (isSupported) onUpdate(slot.copy(role = role)) },
@@ -1133,6 +1144,101 @@ fun ApiSlotCard(
                                 )
                             )
                         }
+                    }
+
+                    Text(
+                        text = slot.role.description,
+                        fontSize = 11.sp,
+                        color = EditorialTextMuted
+                    )
+
+                    // Explicit walk switch: what happens when the model above fails.
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Walk free models automatically",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = EditorialTextPrimary
+                            )
+                            Text(
+                                text = if (slot.walkFreeModels) {
+                                    "If this model fails, try other free models from " +
+                                        slot.provider.displayName + "'s live catalogue."
+                                } else {
+                                    "Off: only " + slot.model + " will be tried."
+                                },
+                                fontSize = 10.sp,
+                                color = EditorialTextMuted
+                            )
+                        }
+                        Switch(
+                            checked = slot.walkFreeModels,
+                            onCheckedChange = { onUpdate(slot.copy(walkFreeModels = it)) }
+                        )
+                    }
+
+                    val freeCounts = ModelWalk.freeCounts(slot.provider, catalog)
+                    val walkNeedsVision = slot.role != SlotRole.TRANSLATE
+                    val walkPlan = ModelWalk.planFor(slot, catalog, needVision = walkNeedsVision)
+                    val providerCatalogue = ModelWalk.catalogFor(slot.provider, catalog)
+
+                    Text(
+                        text = if (providerCatalogue.isNotEmpty()) {
+                            freeCounts.translatable.toString() + " free models can translate, " +
+                                freeCounts.visionCapable.toString() + " can also read a page."
+                        } else {
+                            "No " + slot.provider.displayName + " catalogue yet. Tap Refresh free models."
+                        },
+                        fontSize = 10.sp,
+                        color = EditorialTextMuted
+                    )
+
+                    if (slot.walkFreeModels && walkPlan.fallbacks.isNotEmpty()) {
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                text = if (walkNeedsVision) {
+                                    "Will try, in order (reading a page):"
+                                } else {
+                                    "Will try, in order (translating):"
+                                },
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = EditorialTextMuted
+                            )
+                            walkPlan.all.take(5).forEachIndexed { position, modelId ->
+                                Text(
+                                    text = (position + 1).toString() + ". " + modelId +
+                                        if (position == 0) "  (your choice)" else "",
+                                    fontSize = 10.sp,
+                                    color = EditorialTextMuted,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            if (walkPlan.all.size > 5) {
+                                Text(
+                                    text = "+" + (walkPlan.all.size - 5).toString() + " more",
+                                    fontSize = 10.sp,
+                                    color = EditorialTextMuted
+                                )
+                            }
+                        }
+                    }
+
+                    TextButton(
+                        onClick = onRefreshCatalog,
+                        enabled = !isRefreshingCatalog
+                    ) {
+                        Text(
+                            text = if (isRefreshingCatalog) "Fetching free models..." else "Refresh free models",
+                            fontSize = 11.sp,
+                            color = EditorialLavender
+                        )
                     }
 
                     // Delete Slot button

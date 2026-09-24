@@ -311,6 +311,10 @@ class ModelCatalogStore(private val dir: File) {
         }
     }
 
+    /** Epoch millis of the last successful fetch, or 0 when no catalogue has ever been written. */
+    fun lastFetchedEpochMs(): Long =
+        if (catalogFile.exists()) catalogFile.lastModified() else 0L
+
     fun isFresh(ttlMs: Long = 24 * 60 * 60 * 1000L): Boolean {
         if (!catalogFile.exists()) return false
         return try {

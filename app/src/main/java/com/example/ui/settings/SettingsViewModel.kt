@@ -6,16 +6,21 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.slots.ApiProvider
 import com.example.data.slots.ApiSlot
+import com.example.data.slots.CatalogModel
+import com.example.data.slots.ModelCatalogRefresher
+import com.example.data.slots.ModelCatalogStore
 import com.example.data.slots.SlotRole
 import com.example.data.slots.SlotStorage
 import com.example.net.GeminiClient
 import com.example.net.OpenAiCompatibleClient
 import com.example.utils.RunLogEntry
 import com.example.utils.RunLogger
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -31,6 +36,11 @@ data class SlotTestResult(
 data class SettingsUiState(
     val slots: List<ApiSlot> = emptyList(),
     val targetLanguage: String = "English",
+    /** Live free-model catalogue: drives the capability badges, the walk preview and its counts. */
+    val catalog: List<CatalogModel> = emptyList(),
+    val catalogFetchedAtMs: Long = 0L,
+    val catalogDetail: String = "",
+    val isRefreshingCatalog: Boolean = false,
     val inpaintEngine: String = "FLAT_FILL", // FLAT_FILL, REPLICATE, FAL
     val runLogs: List<RunLogEntry> = emptyList(),
     val activeViewingLogText: String? = null,
@@ -64,6 +74,48 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             }
         }
         loadRunLogs()
+        loadCachedCatalog()
+    }
+
+    private fun catalogStore(): ModelCatalogStore =
+        ModelCatalogStore(getApplication<android.app.Application>().filesDir)
+
+    /** Shows whatever catalogue is already cached, so badges and counts are right on first paint. */
+    private fun loadCachedCatalog() {
+        val store = catalogStore()
+        viewModelScope.launch {
+            val cached = withContext(Dispatchers.IO) { store.load() }
+            if (cached.isNotEmpty()) {
+                _uiState.value = _uiState.value.copy(
+                    catalog = cached,
+                    catalogFetchedAtMs = store.lastFetchedEpochMs()
+                )
+            }
+        }
+    }
+
+    /**
+     * Fetches the live catalogues so the free-model walk has candidates. Reachable from Settings, and
+     * also driven automatically by the pipeline, which refreshes whenever the cache is stale.
+     */
+    fun refreshCatalog() {
+        val store = catalogStore()
+        val slots = _uiState.value.slots
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(
+                isRefreshingCatalog = true,
+                catalogDetail = "Fetching..."
+            )
+            val outcome = withContext(Dispatchers.IO) {
+                ModelCatalogRefresher.refreshIfStale(store, slots, force = true)
+            }
+            _uiState.value = _uiState.value.copy(
+                catalog = outcome.models,
+                catalogFetchedAtMs = store.lastFetchedEpochMs(),
+                catalogDetail = outcome.detail,
+                isRefreshingCatalog = false
+            )
+        }
     }
 
     fun loadRunLogs() {
