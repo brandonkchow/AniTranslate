@@ -10,10 +10,12 @@ import com.example.data.slots.ModelCatalogRefresher
 import com.example.data.slots.ModelCatalogStore
 import com.example.data.slots.ModelFilter
 import com.example.data.slots.ModelWalk
+import com.example.data.slots.ProviderOrder
 import com.example.data.slots.SlotStorage
 import com.example.net.ApiException
 import com.example.net.GeminiClient
 import com.example.net.OpenAiCompatibleClient
+import com.example.net.PolicyRefusal
 import com.example.pipeline.detect.BubbleTextAnchor
 import com.example.pipeline.detect.BubbleTextMerger
 import com.example.pipeline.detect.DetectedRegion
@@ -101,6 +103,23 @@ class PagePipeline(
         // walk silently collapses to the pinned model alone. Never throws: a failed refresh leaves
         // the previous cache in place and the page still runs.
         ModelCatalogRefresher.refreshIfStale(catalogStore, slotStorage.slots.value)
+
+        // Self-heal stale "invalid key" badges once per process. The old classifier badged a slot on
+        // ANY 403, so a policy refusal left a valid key excluded from the chain until it was re-typed
+        // - the runtime contradicting the key screen. Ask the provider's auth endpoint; a key that is
+        // genuinely accepted gets its badge cleared.
+        val healedSlotIds = keyRouter.revalidateBadgedKeys { slot ->
+            when (slot.provider) {
+                ApiProvider.GEMINI -> geminiClient.testKey(slot.baseUrl, slot.apiKey)
+                else -> openAiClient.testKey(slot.baseUrl, slot.apiKey, slot.provider)
+            }
+        }
+        if (healedSlotIds.isNotEmpty()) {
+            RunLogger.logPageEvent(
+                context, currentPage.jobId, currentPage.pageIndex, "KEY_REVALIDATED",
+                "Cleared a stale invalid-key badge on ${healedSlotIds.size} slot(s): the provider accepted the stored key"
+            )
+        }
 
         val catalog = catalogStore.load()
 
@@ -267,9 +286,13 @@ class PagePipeline(
                         StandbyWalkDiagnostics.formatCandidatesLog(standbyVisionModels)
                     )
                     var standbyAttempted = false
-                    val allSlots = slotStorage.slots.value
+                    // Local capacity first, then Groq, OpenRouter, and Gemini last (ProviderOrder).
+                    val allSlots = ProviderOrder.ordered(slotStorage.slots.value) { it.provider }
                     for (standbyModel in standbyVisionModels) {
                         if (totalDetectAttempts >= maxAttempts) break
+                        // Skip a model this provider already refused on policy grounds: the key is
+                        // valid, only that model is not permitted for this account.
+                        if (keyRouter.isModelPolicyBlocked(standbyModel.providerId, standbyModel.id)) continue
                         val eligibleSlot = allSlots.firstOrNull { s ->
                             // Same predicate the diagnostics explain with, so the logged reason
                             // can never disagree with what the walk actually tried.
@@ -302,6 +325,9 @@ class PagePipeline(
 
                         if (standbyResult.isFailure) {
                             val errorInfo = classifyException(standbyResult.exceptionOrNull())
+                            if (errorInfo.eventTag == "POLICY_BLOCKED") {
+                                keyRouter.rememberPolicyBlock(standbyModel.providerId, standbyModel.id)
+                            }
                             lastDetectDisposition = errorInfo
                             attemptedDetectNotes += "${eligibleSlot.displayTitle}:${standbyModel.id} [${errorInfo.eventTag}]"
                             RunLogger.logPageEvent(
@@ -646,12 +672,18 @@ class PagePipeline(
                 // Build candidate model list for this slot: pinned model first, then catalog free models
                 // One source of truth with the Settings UI, honouring the explicit per-slot walk switch.
                 val plan = ModelWalk.planFor(slot, catalog, needVision = false)
+                // Skip models this provider already refused on policy grounds this process (e.g. a
+                // ZDR-excluded pin). Falls back to the untouched plan, so a provider that refused
+                // everything is still attempted rather than silently vanishing from the chain.
                 val candidateModels = plan.all
+                    .filterNot { keyRouter.isModelPolicyBlocked(slot.provider, it) }
+                    .ifEmpty { plan.all }
 
                 if (slot.provider == ApiProvider.OPENROUTER) {
                     // OpenRouter fails over provider-side with a models array (cap 4 entries)
                     totalTranslateAttempts++
                     val fallbackModels = plan.providerSideFallbacks()
+                        .filterNot { keyRouter.isModelPolicyBlocked(slot.provider, it) }
                     currentPage = currentPage.copy(activeSlotName = slot.displayTitle)
                     val attemptSuffix = if (totalTranslateAttempts > 1) " (fallback attempt $totalTranslateAttempts/$translateBudget)" else ""
                     RunLogger.logPageEvent(
@@ -660,11 +692,18 @@ class PagePipeline(
                     )
                     onStatusUpdate(currentPage)
 
+                    // OpenRouter fails over provider-side, so a policy-blocked pin is moved out of the
+                    // primary position instead of being sent first and refused again.
+                    val primaryModel = if (keyRouter.isModelPolicyBlocked(slot.provider, slot.model)) {
+                        candidateModels.firstOrNull { it != slot.model } ?: slot.model
+                    } else {
+                        slot.model
+                    }
                     val (transResult, attemptElapsedMs) = executeWithSlotAndObservability(
                         PipelineStage.TRANSLATE, slot, currentPage.pageIndex, currentPage.jobId
                     ) { s ->
                         openAiClient.translateBubbles(
-                            s.baseUrl, s.apiKey, s.model, bubbles,
+                            s.baseUrl, s.apiKey, primaryModel, bubbles,
                             provider = s.provider,
                             storyContext = storyContext,
                             fallbackModels = fallbackModels
@@ -677,6 +716,9 @@ class PagePipeline(
                         val errorInfo = classifyException(transResult.exceptionOrNull())
                         lastDisposition = errorInfo
                         attemptedSlotNotes += "${slot.displayTitle} [${errorInfo.eventTag}]"
+                        if (errorInfo.eventTag == "POLICY_BLOCKED") {
+                            keyRouter.rememberPolicyBlock(slot.provider, primaryModel)
+                        }
                         RunLogger.logPageEvent(
                             context, currentPage.jobId, currentPage.pageIndex, errorInfo.eventTag,
                             "${errorInfo.userMessage} (${elapsedMs}ms, cause: ${errorInfo.eventTag}) — slot \"${slot.displayTitle}\" (${slot.model}), attempt $totalTranslateAttempts/$translateBudget"
@@ -734,6 +776,9 @@ class PagePipeline(
                         if (transResult.isFailure) {
                             val errorInfo = classifyException(transResult.exceptionOrNull())
                             lastDisposition = errorInfo
+                            if (errorInfo.eventTag == "POLICY_BLOCKED") {
+                                keyRouter.rememberPolicyBlock(slot.provider, candidateModel)
+                            }
                             attemptedSlotNotes += "${slot.displayTitle}:$candidateModel [${errorInfo.eventTag}]"
                             RunLogger.logPageEvent(
                                 context, currentPage.jobId, currentPage.pageIndex, errorInfo.eventTag,
@@ -859,12 +904,24 @@ class PagePipeline(
                 )
             }
             if (exception.isInvalidKey) {
+                // 401 only: the credentials themselves were rejected.
                 return ErrorDisposition(
                     isTransient = false,
                     isRateLimit = false,
                     backoffMs = 0L,
                     eventTag = "AUTH_FAIL",
-                    userMessage = "API Key Unauthorized (HTTP ${exception.statusCode}): ${exception.message}"
+                    userMessage = "API key rejected (HTTP ${exception.statusCode}): ${exception.message}"
+                )
+            }
+            if (PolicyRefusal.isPolicyRefusal(exception)) {
+                // 403 policy refusal (ZDR / guardrails / data policy): the key is VALID, this model is
+                // not permitted. Never report it as an auth failure and never badge the key.
+                return ErrorDisposition(
+                    isTransient = false,
+                    isRateLimit = false,
+                    backoffMs = 0L,
+                    eventTag = "POLICY_BLOCKED",
+                    userMessage = "Model refused by provider policy (HTTP ${exception.statusCode}): ${exception.message}"
                 )
             }
         }

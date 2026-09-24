@@ -3,6 +3,7 @@ package com.example.pipeline.router
 import com.example.data.slots.ApiProvider
 import com.example.data.slots.ApiSlot
 import com.example.data.slots.CatalogModel
+import com.example.data.slots.ProviderOrder
 import com.example.data.slots.SlotRole
 
 /**
@@ -133,7 +134,9 @@ object StandbyWalkDiagnostics {
         if (standbyCandidates.isEmpty()) {
             return "Standby vision candidates: 0 available"
         }
-        val providers = standbyCandidates.map { it.providerId.lowercase() }.distinct()
+        // Listed in the order the walk will actually try them (ProviderOrder): Groq, OpenRouter, and
+        // Gemini last - so the log reads like the chain instead of like storage order.
+        val providers = ProviderOrder.orderedProviderIds(standbyCandidates.map { it.providerId })
         return "Standby vision candidates: ${standbyCandidates.size} mapped to [${providers.joinToString(", ")}]"
     }
 }

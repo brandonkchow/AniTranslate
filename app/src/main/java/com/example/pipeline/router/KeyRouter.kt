@@ -4,9 +4,12 @@ import com.example.data.slots.ApiProvider
 import com.example.data.slots.ApiSlot
 import com.example.data.slots.CatalogModel
 import com.example.data.slots.ModelCatalogStore
+import com.example.data.slots.ProviderOrder
 import com.example.data.slots.SlotRole
 import com.example.data.slots.SlotStorage
 import com.example.net.ApiException
+import com.example.net.PolicyRefusal
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
@@ -83,8 +86,13 @@ class KeyRouter(
             return Pair(null, null)
         }
 
+        // Ordering is decided HERE, after capability/role filtering, so a capable slot can never be
+        // queued behind an incapable one (Groq is text-only and still never receives an image):
+        // local -> Groq -> OpenRouter -> ... -> Gemini last (see [ProviderOrder]).
+        val rankedSlots = ProviderOrder.ordered(matchingSlots) { it.provider }
+
         // Find first slot not cooling
-        val readySlot = matchingSlots.firstOrNull { !it.isCoolingDown(now) }
+        val readySlot = rankedSlots.firstOrNull { !it.isCoolingDown(now) }
         if (readySlot != null) {
             return Pair(readySlot, null)
         }
@@ -179,6 +187,55 @@ class KeyRouter(
         return result
     }
 
+    /**
+     * Models a provider refused on **policy** grounds during this process. The key is valid; those
+     * specific models are not permitted for this account. Keeping this per-process memory stops a
+     * poisoned pin (e.g. a ZDR-excluded model) from burning an attempt on every single page.
+     */
+    private val policyBlockedModels = ConcurrentHashMap<String, MutableSet<String>>()
+
+    /** One-shot guard: badged keys are re-probed once per process, not once per page. */
+    private val keysRevalidated = AtomicBoolean(false)
+
+    /** A policy refusal is per-model, not per-key: cool briefly so the walk moves to the next. */
+    private val policyCooldownMs = 45_000L
+
+    fun rememberPolicyBlock(providerId: String, modelId: String) {
+        if (modelId.isBlank()) return
+        policyBlockedModels.getOrPut(providerId.lowercase()) { ConcurrentHashMap.newKeySet() }.add(modelId)
+    }
+
+    fun rememberPolicyBlock(provider: ApiProvider, modelId: String) = rememberPolicyBlock(provider.name, modelId)
+
+    fun isModelPolicyBlocked(providerId: String, modelId: String): Boolean =
+        policyBlockedModels[providerId.lowercase()]?.contains(modelId) == true
+
+    fun isModelPolicyBlocked(provider: ApiProvider, modelId: String): Boolean =
+        isModelPolicyBlocked(provider.name, modelId)
+
+    /**
+     * Self-heal for badges written by the old `403 => invalid key` logic (or by a 401 that has since
+     * been fixed): re-probes each badged slot's key once per process and clears the badge when the
+     * provider genuinely accepts it. Without this a stale badge keeps a working slot out of the
+     * chain until the user re-types a key that was never wrong.
+     *
+     * @param tester provider auth probe, e.g. the client's `testKey`
+     * @return ids of slots whose badge was cleared
+     */
+    suspend fun revalidateBadgedKeys(tester: suspend (ApiSlot) -> Result<String>): List<String> {
+        if (!keysRevalidated.compareAndSet(false, true)) return emptyList()
+        val cleared = mutableListOf<String>()
+        for (slot in slotStorage.slots.value) {
+            if (!slot.isInvalidKey) continue
+            val accepted = runCatching { tester(slot) }.getOrNull()?.isSuccess == true
+            if (accepted) {
+                slotStorage.markSlotInvalidKey(slot.id, false)
+                cleared += slot.id
+            }
+        }
+        return cleared
+    }
+
     private fun <T> handleExecutionResult(stage: PipelineStage, slot: ApiSlot, result: Result<T>, latencyMs: Long) {
         val exception = result.exceptionOrNull()
         if (exception is ApiException) {
@@ -193,13 +250,16 @@ class KeyRouter(
             )
 
             if (exception.isInvalidKey) {
-                // 401 / 403: Badge slot invalid
+                // 401 ONLY: the credentials themselves were rejected. This is the one status that may
+                // condemn a key - and the badge the Settings "Test key" action clears. A 403 means the
+                // key AUTHENTICATED and the request was refused by policy, so badging it here made the
+                // runtime contradict the key screen and silently killed a working slot.
                 slotStorage.markSlotInvalidKey(slot.id, true)
-            } else if (exception.message.contains("ZDR violation", ignoreCase = true) ||
-                       exception.message.contains("guardrail restrictions", ignoreCase = true) ||
-                       exception.message.contains("data policy", ignoreCase = true)) {
-                // Policy exclusion: cooldown for 15 minutes to let alternative slots handle requests
-                slotStorage.setSlotCooldown(slot.id, 900_000L, incrementRateLimits = false)
+            } else if (PolicyRefusal.isPolicyRefusal(exception)) {
+                // Policy refusal (403: ZDR / guardrail restrictions / data policy). The key is fine, so
+                // it is NOT badged: cool just long enough to walk past this model, and remember the
+                // model so the next page starts from a different one.
+                slotStorage.setSlotCooldown(slot.id, policyCooldownMs, incrementRateLimits = false)
             } else if (isRateLimit) {
                 // 429 / 503 / Quota: Calculate backoff with parsed retry delay
                 val backoffMs = (exception.retryAfterMs ?: calculateBackoffMs(slot.consecutiveRateLimits)).coerceAtLeast(10_000L)

@@ -590,13 +590,17 @@ fun PageQueueCard(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                } else if (page.status == PageStatus.WAITING && page.remainingWaitSeconds() > 0) {
+                } else if (page.status == PageStatus.WAITING && page.errorMessage.isNotBlank()) {
+                    // No retry-countdown window on the job screen: the page reports WHY it is waiting
+                    // (every slot cooling / quota exhausted) instead of a Gemini cooldown timer.
                     Text(
-                        text = "Waiting ${page.remainingWaitSeconds()}s for slot: ${page.activeSlotName.ifBlank { "Next" }}",
+                        text = page.errorMessage,
                         style = MaterialTheme.typography.bodySmall,
                         color = EditorialLavender,
                         fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                        fontSize = 10.sp
+                        fontSize = 10.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
                     )
                 } else if (page.activeSlotName.isNotBlank()) {
                     Row(
