@@ -2,6 +2,8 @@ package com.example.pipeline.router
 
 import com.example.data.slots.ApiProvider
 import com.example.data.slots.ApiSlot
+import com.example.data.slots.CatalogModel
+import com.example.data.slots.ModelCatalogStore
 import com.example.data.slots.SlotRole
 import com.example.data.slots.SlotStorage
 import com.example.net.ApiException
@@ -15,7 +17,31 @@ enum class PipelineStage {
     TRANSLATE
 }
 
-class KeyRouter(private val slotStorage: SlotStorage) {
+enum class ExclusionReason {
+    NO_API_KEY,
+    DISABLED,
+    INVALID_KEY,
+    ROLE_MISMATCH,
+    COOLDOWN,
+    RETIRED_MODEL,
+    CAPABILITY_MISMATCH,
+    EXHAUSTED
+}
+
+data class SlotExclusion(
+    val slotId: String,
+    val model: String,
+    val reason: ExclusionReason
+)
+
+class KeyRouter(
+    private val slotStorage: SlotStorage,
+    private val catalogStore: ModelCatalogStore? = null,
+    val maxAttempts: Int = DEFAULT_MAX_ATTEMPTS
+) {
+    companion object {
+        const val DEFAULT_MAX_ATTEMPTS = 3
+    }
 
     // Concurrency controls per slot:
     // 1) Max 2 in-flight HTTP requests per slot
@@ -34,13 +60,15 @@ class KeyRouter(private val slotStorage: SlotStorage) {
 
     suspend fun getAvailableSlot(
         stage: PipelineStage,
-        excludeSlotIds: Set<String> = emptySet()
+        excludeSlotIds: Set<String> = emptySet(),
+        maxAttempts: Int = this.maxAttempts
     ): Pair<ApiSlot?, Long?> = routerMutex.withLock {
         val now = System.currentTimeMillis()
         val slots = slotStorage.slots.value
 
         val matchingSlots = slots.filter { slot ->
             slot.enabled &&
+            !slot.isModelRetired &&
             (slot.apiKey.isNotBlank() || slot.provider == ApiProvider.WORKSTATION || slot.provider == ApiProvider.HUGGINGFACE) &&
             !slot.isInvalidKey &&
             slot.id !in excludeSlotIds &&
@@ -64,6 +92,46 @@ class KeyRouter(private val slotStorage: SlotStorage) {
         val earliestCooldownSlot = matchingSlots.minByOrNull { it.cooldownUntilEpochMs }
         val earliestTime = earliestCooldownSlot?.cooldownUntilEpochMs ?: (now + 15000L)
         return Pair(null, earliestTime)
+    }
+
+    fun explain(
+        stage: PipelineStage,
+        excludeSlotIds: Set<String> = emptySet(),
+        catalog: List<CatalogModel>? = null
+    ): List<SlotExclusion> {
+        val now = System.currentTimeMillis()
+        val slots = slotStorage.slots.value
+        val activeCatalog = catalog ?: catalogStore?.load()
+
+        val exclusions = mutableListOf<SlotExclusion>()
+        for (slot in slots) {
+            val reason: ExclusionReason? = when {
+                !slot.enabled -> ExclusionReason.DISABLED
+                slot.isModelRetired || isRetiredInCatalog(slot, activeCatalog) -> ExclusionReason.RETIRED_MODEL
+                slot.apiKey.isBlank() && slot.provider != ApiProvider.WORKSTATION && slot.provider != ApiProvider.HUGGINGFACE -> ExclusionReason.NO_API_KEY
+                slot.isInvalidKey -> ExclusionReason.INVALID_KEY
+                stage == PipelineStage.DETECT_OCR && !slot.isVisionSupported -> ExclusionReason.CAPABILITY_MISMATCH
+                when (stage) {
+                    PipelineStage.DETECT_OCR -> slot.role != SlotRole.DETECT_OCR && slot.role != SlotRole.ANY
+                    PipelineStage.TRANSLATE -> slot.role != SlotRole.TRANSLATE && slot.role != SlotRole.ANY
+                } -> ExclusionReason.ROLE_MISMATCH
+                slot.id in excludeSlotIds -> ExclusionReason.EXHAUSTED
+                slot.isCoolingDown(now) -> ExclusionReason.COOLDOWN
+                else -> null
+            }
+            if (reason != null) {
+                exclusions.add(SlotExclusion(slot.id, slot.model, reason))
+            }
+        }
+        return exclusions
+    }
+
+    private fun isRetiredInCatalog(slot: ApiSlot, catalog: List<CatalogModel>?): Boolean {
+        if (catalog.isNullOrEmpty()) return false
+        val providerKey = slot.provider.name.lowercase()
+        val providerModels = catalog.filter { it.providerId.lowercase() == providerKey }
+        if (providerModels.isEmpty()) return false
+        return providerModels.none { it.id == slot.model }
     }
 
     suspend fun <T> executeWithSlot(

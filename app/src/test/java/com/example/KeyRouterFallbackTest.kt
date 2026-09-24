@@ -47,9 +47,17 @@ class KeyRouterFallbackTest {
     fun setup() {
         context = ApplicationProvider.getApplicationContext()
         storage = SlotStorage.getInstance(context)
-        // Deterministic starting state: every slot disabled, keyless, healthy, off cooldown.
+        // Deterministic starting state: every slot disabled, keyless, healthy, off cooldown, not retired.
         storage.loadSlots().forEach { slot ->
-            storage.updateSlot(slot.copy(enabled = false, apiKey = "", isInvalidKey = false))
+            storage.updateSlot(
+                slot.copy(
+                    enabled = false,
+                    apiKey = "",
+                    isInvalidKey = false,
+                    isModelRetired = false,
+                    model = slot.provider.defaultModel
+                )
+            )
             storage.resetSlotCooldown(slot.id)
         }
         router = KeyRouter(storage)
@@ -62,6 +70,8 @@ class KeyRouterFallbackTest {
             existing.copy(
                 enabled = true,
                 apiKey = apiKey,
+                model = provider.defaultModel,
+                isModelRetired = false,
                 role = SlotRole.TRANSLATE,
                 isInvalidKey = false
             )
@@ -198,6 +208,91 @@ class KeyRouterFallbackTest {
             "The stock OpenRouter model must not be one that ZDR-enforcing accounts reject",
             openRouterDefault.model.contains("nemotron", ignoreCase = true)
         )
-        assertEquals("meta-llama/llama-3.3-70b-instruct:free", openRouterDefault.model)
+        assertEquals("google/gemma-4-31b-it:free", openRouterDefault.model)
+    }
+
+    @Test
+    fun explainReportsNoApiKeyForEnabledKeylessSlot() {
+        val openRouter = storage.loadSlots().first { it.provider == ApiProvider.OPENROUTER }
+        storage.updateSlot(
+            openRouter.copy(
+                enabled = true,
+                apiKey = "",
+                role = SlotRole.TRANSLATE,
+                isInvalidKey = false,
+                isModelRetired = false
+            )
+        )
+        val exclusions = router.explain(PipelineStage.TRANSLATE)
+        val openRouterExclusion = exclusions.find { it.slotId == openRouter.id }
+        assertNotNull("Keyless enabled slot must be reported in exclusions", openRouterExclusion)
+        assertEquals(com.example.pipeline.router.ExclusionReason.NO_API_KEY, openRouterExclusion!!.reason)
+    }
+
+    @Test
+    fun explainReportsDisabledForDisabledSlot() {
+        val gemini = storage.loadSlots().first { it.provider == ApiProvider.GEMINI }
+        storage.updateSlot(
+            gemini.copy(
+                enabled = false,
+                apiKey = "test-key",
+                role = SlotRole.TRANSLATE,
+                isInvalidKey = false
+            )
+        )
+        val exclusions = router.explain(PipelineStage.TRANSLATE)
+        val geminiExclusion = exclusions.find { it.slotId == gemini.id }
+        assertNotNull("Disabled slot must be reported in exclusions", geminiExclusion)
+        assertEquals(com.example.pipeline.router.ExclusionReason.DISABLED, geminiExclusion!!.reason)
+    }
+
+    @Test
+    fun explainReportsRetiredModelForUnknownOrRetiredModel() {
+        val openRouter = storage.loadSlots().first { it.provider == ApiProvider.OPENROUTER }
+        storage.updateSlot(
+            openRouter.copy(
+                enabled = true,
+                apiKey = "test-key",
+                model = "retired/old-model-v1",
+                role = SlotRole.TRANSLATE,
+                isInvalidKey = false,
+                isModelRetired = true
+            )
+        )
+        val exclusions = router.explain(PipelineStage.TRANSLATE)
+        val retiredExclusion = exclusions.find { it.slotId == openRouter.id }
+        assertNotNull("Slot with retired model must be reported in exclusions", retiredExclusion)
+        assertEquals(com.example.pipeline.router.ExclusionReason.RETIRED_MODEL, retiredExclusion!!.reason)
+    }
+
+    @Test
+    fun explainReportsRetiredModelWhenModelAbsentFromCatalog() {
+        val groq = storage.loadSlots().first { it.provider == ApiProvider.GROQ }
+        storage.updateSlot(
+            groq.copy(
+                enabled = true,
+                apiKey = "gsk-test",
+                model = "defunct-groq-model",
+                role = SlotRole.TRANSLATE,
+                isInvalidKey = false,
+                isModelRetired = false
+            )
+        )
+        val catalog = listOf(
+            com.example.data.slots.CatalogModel(
+                id = "openai/gpt-oss-120b",
+                displayName = "GPT-OSS 120B",
+                free = true,
+                acceptsImage = false,
+                textOnlyOutput = true,
+                supportsJson = true,
+                contextLength = 131072,
+                providerId = "groq"
+            )
+        )
+        val exclusions = router.explain(PipelineStage.TRANSLATE, catalog = catalog)
+        val groqExclusion = exclusions.find { it.slotId == groq.id }
+        assertNotNull("Slot with unknown model absent from catalog must report RETIRED_MODEL", groqExclusion)
+        assertEquals(com.example.pipeline.router.ExclusionReason.RETIRED_MODEL, groqExclusion!!.reason)
     }
 }

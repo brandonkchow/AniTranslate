@@ -914,7 +914,9 @@ fun ApiSlotCard(
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp
                     )
-                    if (slot.isInvalidKey) {
+                    if (slot.isModelRetired) {
+                        Text(text = "• Retired (pick a replacement)", color = EditorialCrimsonLight, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    } else if (slot.isInvalidKey) {
                         Text(text = "• Invalid Key", color = EditorialCrimsonLight, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     } else if (slot.isCoolingDown()) {
                         Text(text = "• Cooldown (${slot.remainingCooldownSeconds()}s)", color = EditorialAmber, fontSize = 11.sp, fontWeight = FontWeight.Medium)

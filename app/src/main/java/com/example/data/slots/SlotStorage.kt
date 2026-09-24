@@ -81,6 +81,22 @@ class SlotStorage private constructor(private val context: Context) {
             updated
         }
 
+        // Repair this app's own shipped defaults that upstream retired (offline, no catalogue needed).
+        val (repairedSlots, wasRepaired) = ModelCatalogMigration.applyKnownRetiredRepair(loaded)
+        if (wasRepaired) {
+            loaded = repairedSlots
+            modified = true
+        }
+
+        // Retirement migration: mark slots whose model is missing from cached catalog as retired
+        val catalogStore = ModelCatalogStore(context.filesDir)
+        val cachedCatalog = catalogStore.load()
+        val (migratedSlots, wasMigrated) = ModelCatalogMigration.applyRetirementMigration(loaded, cachedCatalog)
+        if (wasMigrated) {
+            loaded = migratedSlots
+            modified = true
+        }
+
         if (modified) {
             saveSlotsInternal(loaded)
         }
@@ -103,9 +119,9 @@ class SlotStorage private constructor(private val context: Context) {
         return listOf(
             ApiSlot(
                 provider = ApiProvider.OPENROUTER,
-                label = "OpenRouter: Llama 3.3 70B (free, ZDR)",
+                label = "OpenRouter: Gemma 4 31B (free, ZDR)",
                 apiKey = "",
-                model = "meta-llama/llama-3.3-70b-instruct:free",
+                model = "google/gemma-4-31b-it:free",
                 baseUrl = "https://openrouter.ai/api/v1",
                 role = SlotRole.TRANSLATE,
                 enabled = true
@@ -121,9 +137,9 @@ class SlotStorage private constructor(private val context: Context) {
             ),
             ApiSlot(
                 provider = ApiProvider.GROQ,
-                label = "Groq: Llama 3.3 70B (Fast & Free)",
+                label = "Groq: GPT-OSS 120B (Fast & Free)",
                 apiKey = "",
-                model = "llama-3.3-70b-versatile",
+                model = "openai/gpt-oss-120b",
                 baseUrl = "https://api.groq.com/openai/v1",
                 role = SlotRole.TRANSLATE,
                 enabled = true

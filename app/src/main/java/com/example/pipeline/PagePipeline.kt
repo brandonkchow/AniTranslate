@@ -6,6 +6,9 @@ import com.example.data.db.PageStatus
 import com.example.data.models.Bubble
 import com.example.data.slots.ApiProvider
 import com.example.data.slots.ApiSlot
+import com.example.data.slots.ModelCatalogStore
+import com.example.data.slots.ModelFilter
+import com.example.data.slots.SlotStorage
 import com.example.net.ApiException
 import com.example.net.GeminiClient
 import com.example.net.OpenAiCompatibleClient
@@ -23,13 +26,22 @@ import com.example.utils.RunLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 class PagePipeline(
     private val context: Context,
     private val keyRouter: KeyRouter,
     private val geminiClient: GeminiClient,
-    private val openAiClient: OpenAiCompatibleClient
+    private val openAiClient: OpenAiCompatibleClient,
+    private val maxAttempts: Int = KeyRouter.DEFAULT_MAX_ATTEMPTS
 ) {
+
+    companion object {
+        private val loggedJobExclusions = ConcurrentHashMap.newKeySet<Long>()
+    }
+
+    private val slotStorage: SlotStorage by lazy { SlotStorage.getInstance(context) }
+    private val catalogStore: ModelCatalogStore by lazy { ModelCatalogStore(context.filesDir) }
 
     /**
      * Tier 1 on-device detector. Held for the lifetime of the pipeline because building an
@@ -43,6 +55,23 @@ class PagePipeline(
         onStatusUpdate: suspend (PageEntity) -> Unit
     ): PageEntity = withContext(Dispatchers.IO) {
         var currentPage = page
+        val catalog = catalogStore.load()
+
+        // Emit ONE exclusion summary per job
+        if (!loggedJobExclusions.contains(currentPage.jobId)) {
+            loggedJobExclusions.add(currentPage.jobId)
+            val detectExclusions = keyRouter.explain(PipelineStage.DETECT_OCR, catalog = catalog)
+            val translateExclusions = keyRouter.explain(PipelineStage.TRANSLATE, catalog = catalog)
+            val summary = buildString {
+                append("Slot Exclusions — Detect/OCR: [")
+                append(detectExclusions.joinToString(", ") { "${it.slotId} (${it.model}): ${it.reason}" })
+                append("] | Translate: [")
+                append(translateExclusions.joinToString(", ") { "${it.slotId} (${it.model}): ${it.reason}" })
+                append("]")
+            }
+            RunLogger.log(context, currentPage.jobId, "SLOT_EXCLUSIONS", summary)
+            RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "SLOT_EXCLUSIONS", summary)
+        }
         val origFile = File(currentPage.originalCachePath)
         if (!origFile.exists()) {
             currentPage = currentPage.copy(
@@ -165,35 +194,98 @@ class PagePipeline(
             // Multi-slot fallback: a vision slot that is rate-limited, policy-excluded, or
             // otherwise unable to serve this page must not abort the job when another configured
             // vision slot could still detect and OCR it.
+            // Gemini stays PRIMARY when its key is present, and the catalog's free IMAGE + JSON
+            // models form the STANDBY walk.
             val attemptedDetectSlotIds = mutableSetOf<String>()
             val attemptedDetectNotes = mutableListOf<String>()
             var lastDetectDisposition: ErrorDisposition? = null
             var detectSucceeded = false
             var elapsedMs = 0L
             var detectSlot: ApiSlot? = null
+            var totalDetectAttempts = 0
 
-            while (!detectSucceeded && attemptedDetectSlotIds.size < MAX_DETECT_SLOT_ATTEMPTS) {
+            val standbyVisionModels = ModelFilter.rank(ModelFilter.usable(catalog, needVision = true))
+
+            while (!detectSucceeded && totalDetectAttempts < maxAttempts) {
                 val (slot, waitTime) = keyRouter.getAvailableSlot(PipelineStage.DETECT_OCR, attemptedDetectSlotIds)
                 if (slot == null) {
-                    val waitUntil = waitTime ?: (System.currentTimeMillis() + 15000L)
-                    val errorMsg = if (attemptedDetectSlotIds.isEmpty()) {
-                        "All vision keys cooling down or not configured."
-                    } else {
-                        "All vision slots exhausted. Tried: ${attemptedDetectNotes.joinToString("; ")}"
+                    // Primary slots exhausted or cooling down. Try the catalog's free IMAGE + JSON standby walk.
+                    var standbyAttempted = false
+                    val allSlots = slotStorage.slots.value
+                    for (standbyModel in standbyVisionModels) {
+                        if (totalDetectAttempts >= maxAttempts) break
+                        val eligibleSlot = allSlots.firstOrNull { s ->
+                            s.enabled &&
+                            s.provider.name.equals(standbyModel.providerId, ignoreCase = true) &&
+                            (s.apiKey.isNotBlank() || s.provider == ApiProvider.WORKSTATION || s.provider == ApiProvider.HUGGINGFACE) &&
+                            !s.isInvalidKey &&
+                            !s.isCoolingDown()
+                        } ?: continue
+
+                        standbyAttempted = true
+                        totalDetectAttempts++
+                        currentPage = currentPage.copy(activeSlotName = "${eligibleSlot.displayTitle} [Standby: ${standbyModel.id}]")
+                        val attemptSuffix = if (totalDetectAttempts > 1) " (fallback attempt $totalDetectAttempts/$maxAttempts)" else ""
+                        RunLogger.logPageEvent(
+                            context, currentPage.jobId, currentPage.pageIndex, "DETECT_START",
+                            "Detecting with ${eligibleSlot.displayTitle} [Standby: ${standbyModel.id}]$attemptSuffix"
+                        )
+                        onStatusUpdate(currentPage)
+
+                        val standbyFallbacks = standbyVisionModels.filter { it.id != standbyModel.id }.map { it.id }.take(3)
+                        val startTimeMs = System.currentTimeMillis()
+                        val standbyResult = keyRouter.executeWithSlot(PipelineStage.DETECT_OCR, eligibleSlot) { s ->
+                            openAiClient.detectBubbles(s.baseUrl, s.apiKey, standbyModel.id, base64, provider = s.provider, fallbackModels = standbyFallbacks)
+                        }
+                        elapsedMs = System.currentTimeMillis() - startTimeMs
+
+                        if (standbyResult.isFailure) {
+                            val errorInfo = classifyException(standbyResult.exceptionOrNull())
+                            lastDetectDisposition = errorInfo
+                            attemptedDetectNotes += "${eligibleSlot.displayTitle}:${standbyModel.id} [${errorInfo.eventTag}]"
+                            RunLogger.logPageEvent(
+                                context, currentPage.jobId, currentPage.pageIndex, errorInfo.eventTag,
+                                "${errorInfo.userMessage} (${elapsedMs}ms) — standby slot \"${eligibleSlot.displayTitle}\" (${standbyModel.id}), attempt $totalDetectAttempts/$maxAttempts"
+                            )
+                            continue
+                        }
+
+                        val servedModel = openAiClient.lastServedModel ?: standbyModel.id
+                        bubbles = standbyResult.getOrNull().orEmpty()
+                        detectSlot = eligibleSlot
+                        detectSucceeded = true
+                        RunLogger.logPageEvent(
+                            context, currentPage.jobId, currentPage.pageIndex, "DETECT_SUCCESS",
+                            "Standby vision detection succeeded in ${elapsedMs}ms via ${eligibleSlot.displayTitle} (served by $servedModel)"
+                        )
+                        break
                     }
-                    currentPage = currentPage.copy(
-                        status = if (attemptedDetectSlotIds.isEmpty()) PageStatus.WAITING else PageStatus.FAILED,
-                        waitingUntilEpochMs = waitUntil,
-                        errorMessage = errorMsg
-                    )
-                    RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "WAIT", errorMsg)
-                    onStatusUpdate(currentPage)
-                    return@withContext currentPage
+
+                    if (detectSucceeded) break
+
+                    if (!standbyAttempted) {
+                        val waitUntil = waitTime ?: (System.currentTimeMillis() + 15000L)
+                        val errorMsg = if (attemptedDetectNotes.isEmpty()) {
+                            "All vision keys cooling down or not configured."
+                        } else {
+                            "All vision slots exhausted. Tried: ${attemptedDetectNotes.joinToString("; ")}"
+                        }
+                        currentPage = currentPage.copy(
+                            status = if (attemptedDetectNotes.isEmpty()) PageStatus.WAITING else PageStatus.FAILED,
+                            waitingUntilEpochMs = waitUntil,
+                            errorMessage = errorMsg
+                        )
+                        RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "WAIT", errorMsg)
+                        onStatusUpdate(currentPage)
+                        return@withContext currentPage
+                    }
+                    continue
                 }
 
+                totalDetectAttempts++
                 attemptedDetectSlotIds.add(slot.id)
                 currentPage = currentPage.copy(activeSlotName = slot.displayTitle)
-                val attemptSuffix = if (attemptedDetectSlotIds.size > 1) " (fallback attempt ${attemptedDetectSlotIds.size}/$MAX_DETECT_SLOT_ATTEMPTS)" else ""
+                val attemptSuffix = if (totalDetectAttempts > 1) " (fallback attempt $totalDetectAttempts/$maxAttempts)" else ""
                 RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "DETECT_START", "Detecting with ${slot.displayTitle} (${slot.model})$attemptSuffix")
                 onStatusUpdate(currentPage)
 
@@ -201,7 +293,11 @@ class PagePipeline(
                 val detectResult = keyRouter.executeWithSlot(PipelineStage.DETECT_OCR, slot) { s ->
                     when (s.provider) {
                         ApiProvider.GEMINI -> geminiClient.detectBubbles(s.baseUrl, s.apiKey, s.model, base64)
-                        ApiProvider.OPENROUTER, ApiProvider.CUSTOM, ApiProvider.WORKSTATION, ApiProvider.HUGGINGFACE ->
+                        ApiProvider.OPENROUTER -> {
+                            val fallbacks = standbyVisionModels.filter { it.id != s.model }.map { it.id }.take(3)
+                            openAiClient.detectBubbles(s.baseUrl, s.apiKey, s.model, base64, provider = s.provider, fallbackModels = fallbacks)
+                        }
+                        ApiProvider.CUSTOM, ApiProvider.WORKSTATION, ApiProvider.HUGGINGFACE ->
                             openAiClient.detectBubbles(s.baseUrl, s.apiKey, s.model, base64, provider = s.provider)
                         ApiProvider.GROQ -> Result.failure(IllegalArgumentException("Groq does not support image detection."))
                     }
@@ -214,14 +310,19 @@ class PagePipeline(
                     attemptedDetectNotes += "${slot.displayTitle} [${errorInfo.eventTag}]"
                     RunLogger.logPageEvent(
                         context, currentPage.jobId, currentPage.pageIndex, errorInfo.eventTag,
-                        "${errorInfo.userMessage} (${elapsedMs}ms) — slot \"${slot.displayTitle}\", attempt ${attemptedDetectSlotIds.size}/$MAX_DETECT_SLOT_ATTEMPTS"
+                        "${errorInfo.userMessage} (${elapsedMs}ms) — slot \"${slot.displayTitle}\" (${slot.model}), attempt $totalDetectAttempts/$maxAttempts"
                     )
                     continue
                 }
 
+                val servedModel = if (slot.provider == ApiProvider.OPENROUTER) openAiClient.lastServedModel ?: slot.model else slot.model
                 bubbles = detectResult.getOrNull().orEmpty()
                 detectSlot = slot
                 detectSucceeded = true
+                RunLogger.logPageEvent(
+                    context, currentPage.jobId, currentPage.pageIndex, "DETECT_SUCCESS",
+                    "Vision detection succeeded in ${elapsedMs}ms via ${slot.displayTitle} (served by $servedModel)"
+                )
             }
 
             if (!detectSucceeded) {
@@ -433,25 +534,27 @@ class PagePipeline(
 
             // Multi-slot fallback: a slot that is rate-limited, policy-excluded (e.g. OpenRouter
             // ZDR guardrails), or otherwise unable to serve this page must not abort the whole job
-            // when other configured translation slots could still handle it. Exhaust up to
-            // MAX_TRANSLATE_SLOT_ATTEMPTS distinct slots, then surface the final failure.
+            // when other configured translation slots could still handle it.
+            // Walk the dynamic ranked candidate list (the slot's pinned model first, then catalog
+            // free models for keyed providers), logging each attempt's model id + outcome.
             val attemptedSlotIds = mutableSetOf<String>()
             val attemptedSlotNotes = mutableListOf<String>()
             var lastDisposition: ErrorDisposition? = null
             var lastElapsedMs = 0L
             var translationSucceeded = false
+            var totalTranslateAttempts = 0
 
-            while (!translationSucceeded && attemptedSlotIds.size < MAX_TRANSLATE_SLOT_ATTEMPTS) {
+            while (!translationSucceeded && totalTranslateAttempts < maxAttempts) {
                 val (slot, waitTime) = keyRouter.getAvailableSlot(PipelineStage.TRANSLATE, attemptedSlotIds)
                 if (slot == null) {
                     val waitUntil = waitTime ?: (System.currentTimeMillis() + 15000L)
-                    val errorMsg = if (attemptedSlotIds.isEmpty()) {
+                    val errorMsg = if (attemptedSlotNotes.isEmpty()) {
                         "All translation keys cooling down or not configured."
                     } else {
                         "All translation slots exhausted. Tried: ${attemptedSlotNotes.joinToString("; ")}"
                     }
                     currentPage = currentPage.copy(
-                        status = if (attemptedSlotIds.isEmpty()) PageStatus.WAITING else PageStatus.FAILED,
+                        status = if (attemptedSlotNotes.isEmpty()) PageStatus.WAITING else PageStatus.FAILED,
                         waitingUntilEpochMs = waitUntil,
                         errorMessage = errorMsg
                     )
@@ -461,55 +564,123 @@ class PagePipeline(
                 }
 
                 attemptedSlotIds.add(slot.id)
-                currentPage = currentPage.copy(activeSlotName = slot.displayTitle)
-                val attemptSuffix = if (attemptedSlotIds.size > 1) " (fallback attempt ${attemptedSlotIds.size}/$MAX_TRANSLATE_SLOT_ATTEMPTS)" else ""
-                RunLogger.logPageEvent(
-                    context, currentPage.jobId, currentPage.pageIndex, "TRANSLATE_START",
-                    "Translating ${bubbles.size} bubbles with ${slot.displayTitle}$attemptSuffix"
-                )
-                onStatusUpdate(currentPage)
 
-                val startTimeMs = System.currentTimeMillis()
-                val transResult = keyRouter.executeWithSlot(PipelineStage.TRANSLATE, slot) { s ->
-                    when (s.provider) {
-                        ApiProvider.GEMINI -> geminiClient.translateBubbles(s.baseUrl, s.apiKey, s.model, bubbles, storyContext = storyContext)
-                        ApiProvider.GROQ, ApiProvider.OPENROUTER, ApiProvider.CUSTOM, ApiProvider.WORKSTATION, ApiProvider.HUGGINGFACE ->
-                            openAiClient.translateBubbles(s.baseUrl, s.apiKey, s.model, bubbles, provider = s.provider, storyContext = storyContext)
-                    }
-                }
-                val elapsedMs = System.currentTimeMillis() - startTimeMs
-                lastElapsedMs = elapsedMs
+                // Build candidate model list for this slot: pinned model first, then catalog free models
+                val providerCatalog = catalog.filter { it.providerId.equals(slot.provider.name, ignoreCase = true) }
+                val usableCatalog = ModelFilter.usable(providerCatalog, needVision = false)
+                val rankedCatalog = ModelFilter.rank(usableCatalog, pinned = listOf(slot.model))
+                val candidateModels = (listOf(slot.model) + rankedCatalog.map { it.id }).distinct()
 
-                if (transResult.isFailure) {
-                    // Policy exclusions (ZDR / data policy), auth failures, and exhausted quotas
-                    // will never succeed on a same-slot retry, so advance to the next slot now.
-                    val errorInfo = classifyException(transResult.exceptionOrNull())
-                    lastDisposition = errorInfo
-                    attemptedSlotNotes += "${slot.displayTitle} [${errorInfo.eventTag}]"
+                if (slot.provider == ApiProvider.OPENROUTER) {
+                    // OpenRouter fails over provider-side with models array (cap 4 entries)
+                    totalTranslateAttempts++
+                    val fallbackModels = candidateModels.filter { it != slot.model }.take(3)
+                    currentPage = currentPage.copy(activeSlotName = slot.displayTitle)
+                    val attemptSuffix = if (totalTranslateAttempts > 1) " (fallback attempt $totalTranslateAttempts/$maxAttempts)" else ""
                     RunLogger.logPageEvent(
-                        context, currentPage.jobId, currentPage.pageIndex, errorInfo.eventTag,
-                        "${errorInfo.userMessage} (${elapsedMs}ms) — slot \"${slot.displayTitle}\", attempt ${attemptedSlotIds.size}/$MAX_TRANSLATE_SLOT_ATTEMPTS"
+                        context, currentPage.jobId, currentPage.pageIndex, "TRANSLATE_START",
+                        "Translating ${bubbles.size} bubbles with ${slot.displayTitle} (${slot.model})$attemptSuffix"
                     )
-                    continue
-                }
+                    onStatusUpdate(currentPage)
 
-                val translations = transResult.getOrNull().orEmpty()
-                bubbles = bubbles.map { b ->
-                    val trans = translations[b.id] ?: b.translated
-                    b.copy(translated = trans)
-                }
-                RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "TRANSLATE_DONE", "Translated ${translations.size} bubbles in ${elapsedMs}ms via ${slot.displayTitle}:")
-                bubbles.forEach { b ->
-                    if (b.translated.isNotBlank()) {
-                        RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "TRANSLATE_ITEM", "  #${b.id}: \"${b.text.replace("\n", " ")}\" -> \"${b.translated.replace("\n", " ")}\"")
+                    val startTimeMs = System.currentTimeMillis()
+                    val transResult = keyRouter.executeWithSlot(PipelineStage.TRANSLATE, slot) { s ->
+                        openAiClient.translateBubbles(
+                            s.baseUrl, s.apiKey, s.model, bubbles,
+                            provider = s.provider,
+                            storyContext = storyContext,
+                            fallbackModels = fallbackModels
+                        )
+                    }
+                    val elapsedMs = System.currentTimeMillis() - startTimeMs
+                    lastElapsedMs = elapsedMs
+
+                    if (transResult.isFailure) {
+                        val errorInfo = classifyException(transResult.exceptionOrNull())
+                        lastDisposition = errorInfo
+                        attemptedSlotNotes += "${slot.displayTitle} [${errorInfo.eventTag}]"
+                        RunLogger.logPageEvent(
+                            context, currentPage.jobId, currentPage.pageIndex, errorInfo.eventTag,
+                            "${errorInfo.userMessage} (${elapsedMs}ms) — slot \"${slot.displayTitle}\" (${slot.model}), attempt $totalTranslateAttempts/$maxAttempts"
+                        )
+                        continue
+                    }
+
+                    val servedModel = openAiClient.lastServedModel ?: slot.model
+                    val translations = transResult.getOrNull().orEmpty()
+                    bubbles = bubbles.map { b ->
+                        val trans = translations[b.id] ?: b.translated
+                        b.copy(translated = trans)
+                    }
+                    RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "TRANSLATE_DONE", "Translated ${translations.size} bubbles in ${elapsedMs}ms via ${slot.displayTitle} (served by $servedModel):")
+                    bubbles.forEach { b ->
+                        if (b.translated.isNotBlank()) {
+                            RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "TRANSLATE_ITEM", "  #${b.id}: \"${b.text.replace("\n", " ")}\" -> \"${b.translated.replace("\n", " ")}\"")
+                        }
+                    }
+                    currentPage = currentPage.copy(
+                        bubblesJson = Bubble.listToJsonString(bubbles),
+                        lastStageAttempted = ""
+                    )
+                    onStatusUpdate(currentPage)
+                    translationSucceeded = true
+                } else {
+                    // Walk candidate models for this slot
+                    for (candidateModel in candidateModels) {
+                        if (totalTranslateAttempts >= maxAttempts) break
+                        totalTranslateAttempts++
+                        currentPage = currentPage.copy(activeSlotName = "${slot.displayTitle} ($candidateModel)")
+                        val attemptSuffix = if (totalTranslateAttempts > 1) " (fallback attempt $totalTranslateAttempts/$maxAttempts)" else ""
+                        RunLogger.logPageEvent(
+                            context, currentPage.jobId, currentPage.pageIndex, "TRANSLATE_START",
+                            "Translating ${bubbles.size} bubbles with ${slot.displayTitle} ($candidateModel)$attemptSuffix"
+                        )
+                        onStatusUpdate(currentPage)
+
+                        val startTimeMs = System.currentTimeMillis()
+                        val transResult = keyRouter.executeWithSlot(PipelineStage.TRANSLATE, slot) { s ->
+                            when (s.provider) {
+                                ApiProvider.GEMINI -> geminiClient.translateBubbles(s.baseUrl, s.apiKey, candidateModel, bubbles, storyContext = storyContext)
+                                else -> openAiClient.translateBubbles(s.baseUrl, s.apiKey, candidateModel, bubbles, provider = s.provider, storyContext = storyContext)
+                            }
+                        }
+                        val elapsedMs = System.currentTimeMillis() - startTimeMs
+                        lastElapsedMs = elapsedMs
+
+                        if (transResult.isFailure) {
+                            val errorInfo = classifyException(transResult.exceptionOrNull())
+                            lastDisposition = errorInfo
+                            attemptedSlotNotes += "${slot.displayTitle}:$candidateModel [${errorInfo.eventTag}]"
+                            RunLogger.logPageEvent(
+                                context, currentPage.jobId, currentPage.pageIndex, errorInfo.eventTag,
+                                "${errorInfo.userMessage} (${elapsedMs}ms) — slot \"${slot.displayTitle}\" ($candidateModel), attempt $totalTranslateAttempts/$maxAttempts"
+                            )
+                            if (errorInfo.isRateLimit || errorInfo.eventTag == "AUTH_FAIL") {
+                                break
+                            }
+                            continue
+                        }
+
+                        val translations = transResult.getOrNull().orEmpty()
+                        bubbles = bubbles.map { b ->
+                            val trans = translations[b.id] ?: b.translated
+                            b.copy(translated = trans)
+                        }
+                        RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "TRANSLATE_DONE", "Translated ${translations.size} bubbles in ${elapsedMs}ms via ${slot.displayTitle} ($candidateModel):")
+                        bubbles.forEach { b ->
+                            if (b.translated.isNotBlank()) {
+                                RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "TRANSLATE_ITEM", "  #${b.id}: \"${b.text.replace("\n", " ")}\" -> \"${b.translated.replace("\n", " ")}\"")
+                            }
+                        }
+                        currentPage = currentPage.copy(
+                            bubblesJson = Bubble.listToJsonString(bubbles),
+                            lastStageAttempted = ""
+                        )
+                        onStatusUpdate(currentPage)
+                        translationSucceeded = true
+                        break
                     }
                 }
-                currentPage = currentPage.copy(
-                    bubblesJson = Bubble.listToJsonString(bubbles),
-                    lastStageAttempted = ""
-                )
-                onStatusUpdate(currentPage)
-                translationSucceeded = true
             }
 
             if (!translationSucceeded) {
@@ -652,15 +823,6 @@ private data class ErrorDisposition(
     val userMessage: String
 )
 
-/**
- * Upper bound on distinct translation slots tried for a single page before the page is marked
- * failed. Keeps a page from cycling through every configured slot (and burning free-tier quota)
- * when the failures are systemic rather than slot-specific.
- */
-private const val MAX_TRANSLATE_SLOT_ATTEMPTS = 3
-
-/**
- * Upper bound on distinct vision slots tried for a single page's detect/OCR pass before the page
- * is marked failed or queued for retry.
- */
-private const val MAX_DETECT_SLOT_ATTEMPTS = 3
+// Backward-compatible default attempt limits
+private const val MAX_TRANSLATE_SLOT_ATTEMPTS = KeyRouter.DEFAULT_MAX_ATTEMPTS
+private const val MAX_DETECT_SLOT_ATTEMPTS = KeyRouter.DEFAULT_MAX_ATTEMPTS

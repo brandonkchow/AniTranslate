@@ -25,13 +25,13 @@ enum class ApiProvider(
     OPENROUTER(
         displayName = "OpenRouter",
         defaultBaseUrl = "https://openrouter.ai/api/v1",
-        defaultModel = "meta-llama/llama-3.3-70b-instruct:free",
+        defaultModel = "google/gemma-4-31b-it:free",
         isVisionCapable = true,
         recommendedModels = listOf(
-            "meta-llama/llama-3.3-70b-instruct:free" to "Meta: Llama 3.3 70B Instruct (Free · ZDR-safe)",
-            "google/gemini-2.0-flash-exp:free" to "Gemini 2.0 Flash Exp (Free · Vision + Translate)",
-            "qwen/qwen-2.5-vl-72b-instruct:free" to "Qwen 2.5 VL 72B (Free · Vision + Translate)",
-            "deepseek/deepseek-chat:free" to "DeepSeek V3 (Free · Translate)",
+            "google/gemma-4-31b-it:free" to "Google: Gemma 4 31B IT (Free · Vision + Translate)",
+            "dots-studio/dots-3-note-preview:free" to "Dots: 3 Note Preview (Free · Vision · 512K ctx)",
+            "nex-agi/nex-n2.5-pro:free" to "Nex: N2.5 Pro (Free · Vision · 262K ctx)",
+            "google/gemma-4-26b-a4b-it:free" to "Google: Gemma 4 26B A4B IT (Free · Vision · 262K ctx)",
             "nvidia/nemotron-3-super-120b-a12b:free" to "NVIDIA: Nemotron 3 Super (Free · ZDR-excluded accounts may fail)",
             "openai/gpt-4o-mini" to "OpenAI: GPT-4o Mini (Paid)"
         )
@@ -39,12 +39,11 @@ enum class ApiProvider(
     GROQ(
         displayName = "Groq",
         defaultBaseUrl = "https://api.groq.com/openai/v1",
-        defaultModel = "llama-3.3-70b-versatile",
+        defaultModel = "openai/gpt-oss-120b",
         isVisionCapable = false, // Groq is text-only — never send images to Groq
         recommendedModels = listOf(
-            "llama-3.3-70b-versatile" to "Llama 3.3 70B Versatile (Fast & Free)",
-            "llama-3.1-8b-instant" to "Llama 3.1 8B Instant (Free)",
-            "gemma2-9b-it" to "Gemma 2 9B IT (Free)"
+            "openai/gpt-oss-120b" to "GPT-OSS 120B (Fast & Free)",
+            "openai/gpt-oss-20b" to "GPT-OSS 20B (High Speed · Free)"
         )
     ),
     WORKSTATION(
@@ -103,7 +102,8 @@ data class ApiSlot(
     val enabled: Boolean = true,
     val isInvalidKey: Boolean = false,
     val cooldownUntilEpochMs: Long = 0L,
-    val consecutiveRateLimits: Int = 0
+    val consecutiveRateLimits: Int = 0,
+    val isModelRetired: Boolean = false
 ) {
     val displayTitle: String
         get() = if (label.isNotBlank()) label else "${provider.displayName} ($model)"
@@ -133,6 +133,7 @@ data class ApiSlot(
             put("isInvalidKey", isInvalidKey)
             put("cooldownUntilEpochMs", cooldownUntilEpochMs)
             put("consecutiveRateLimits", consecutiveRateLimits)
+            put("isModelRetired", isModelRetired)
         }
     }
 
@@ -151,7 +152,8 @@ data class ApiSlot(
                 enabled = json.optBoolean("enabled", true),
                 isInvalidKey = json.optBoolean("isInvalidKey", false),
                 cooldownUntilEpochMs = json.optLong("cooldownUntilEpochMs", 0L),
-                consecutiveRateLimits = json.optInt("consecutiveRateLimits", 0)
+                consecutiveRateLimits = json.optInt("consecutiveRateLimits", 0),
+                isModelRetired = json.optBoolean("isModelRetired", false)
             )
         }
     }

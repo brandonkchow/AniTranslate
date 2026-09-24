@@ -13,6 +13,9 @@ import org.json.JSONObject
 
 class OpenAiCompatibleClient {
 
+    @Volatile
+    var lastServedModel: String? = null
+
     suspend fun testKey(baseUrl: String, apiKey: String, provider: ApiProvider): Result<String> = withContext(Dispatchers.IO) {
         try {
             val cleanBase = baseUrl.trim().removeSuffix("/")
@@ -49,7 +52,8 @@ class OpenAiCompatibleClient {
         model: String,
         imageBase64: String,
         mimeType: String = "image/jpeg",
-        provider: ApiProvider
+        provider: ApiProvider,
+        fallbackModels: List<String> = emptyList()
     ): Result<List<Bubble>> = withContext(Dispatchers.IO) {
         if (provider == ApiProvider.GROQ) {
             return@withContext Result.failure(IllegalArgumentException("Groq is text-only. Cannot process image detection."))
@@ -96,6 +100,15 @@ class OpenAiCompatibleClient {
 
             val requestJson = JSONObject().apply {
                 put("model", model.trim())
+                if (provider == ApiProvider.OPENROUTER && fallbackModels.isNotEmpty()) {
+                    val modelsArr = JSONArray().apply {
+                        put(model.trim())
+                        fallbackModels.filter { it.isNotBlank() && it.trim() != model.trim() }
+                            .take(3)
+                            .forEach { put(it.trim()) }
+                    }
+                    put("models", modelsArr)
+                }
                 val messages = JSONArray().apply {
                     put(JSONObject().apply {
                         put("role", "system")
@@ -145,6 +158,14 @@ class OpenAiCompatibleClient {
                 return@withContext Result.failure(ApiException(code, errorMsg, extractRetryAfter(response.header("Retry-After"), body)))
             }
 
+            val servedModel = try {
+                JSONObject(body).optString("model", model)
+            } catch (_: Exception) {
+                model
+            }
+            lastServedModel = servedModel
+            Log.i("OpenAiCompatibleClient", "detectBubbles served by model: $servedModel (provider: $provider)")
+
             val content = extractChatResponseContent(body)
             val rawBubbles = parseBubblesJson(content)
             val sortedBubbles = Bubble.sortByMangaReadingOrder(rawBubbles)
@@ -160,7 +181,8 @@ class OpenAiCompatibleClient {
         model: String,
         imageBase64: String,
         mimeType: String = "image/jpeg",
-        provider: ApiProvider
+        provider: ApiProvider,
+        fallbackModels: List<String> = emptyList()
     ): Result<List<Bubble>> = withContext(Dispatchers.IO) {
         if (provider == ApiProvider.GROQ) {
             return@withContext Result.failure(IllegalArgumentException("Groq is text-only. Cannot process image detection."))
@@ -205,6 +227,15 @@ class OpenAiCompatibleClient {
 
             val requestJson = JSONObject().apply {
                 put("model", model.trim())
+                if (provider == ApiProvider.OPENROUTER && fallbackModels.isNotEmpty()) {
+                    val modelsArr = JSONArray().apply {
+                        put(model.trim())
+                        fallbackModels.filter { it.isNotBlank() && it.trim() != model.trim() }
+                            .take(3)
+                            .forEach { put(it.trim()) }
+                    }
+                    put("models", modelsArr)
+                }
                 val messages = JSONArray().apply {
                     put(JSONObject().apply {
                         put("role", "system")
@@ -255,6 +286,14 @@ class OpenAiCompatibleClient {
                 return@withContext Result.failure(ApiException(code, errorMsg, extractRetryAfter(response.header("Retry-After"), body)))
             }
 
+            val servedModel = try {
+                JSONObject(body).optString("model", model)
+            } catch (_: Exception) {
+                model
+            }
+            lastServedModel = servedModel
+            Log.i("OpenAiCompatibleClient", "scanAllText served by model: $servedModel (provider: $provider)")
+
             val content = extractChatResponseContent(body)
             val rawBubbles = parseBubblesJson(content)
             val sortedBubbles = Bubble.sortByMangaReadingOrder(rawBubbles)
@@ -270,7 +309,8 @@ class OpenAiCompatibleClient {
         model: String,
         bubbles: List<Bubble>,
         provider: ApiProvider,
-        storyContext: String = ""
+        storyContext: String = "",
+        fallbackModels: List<String> = emptyList()
     ): Result<Map<Int, String>> = withContext(Dispatchers.IO) {
         if (bubbles.isEmpty()) return@withContext Result.success(emptyMap())
         try {
@@ -305,6 +345,15 @@ class OpenAiCompatibleClient {
 
             val requestJson = JSONObject().apply {
                 put("model", model.trim())
+                if (provider == ApiProvider.OPENROUTER && fallbackModels.isNotEmpty()) {
+                    val modelsArr = JSONArray().apply {
+                        put(model.trim())
+                        fallbackModels.filter { it.isNotBlank() && it.trim() != model.trim() }
+                            .take(3)
+                            .forEach { put(it.trim()) }
+                    }
+                    put("models", modelsArr)
+                }
                 val messages = JSONArray().apply {
                     put(JSONObject().apply {
                         put("role", "system")
@@ -341,6 +390,14 @@ class OpenAiCompatibleClient {
                 val errorMsg = extractErrorMessage(body, code)
                 return@withContext Result.failure(ApiException(code, errorMsg, extractRetryAfter(response.header("Retry-After"), body)))
             }
+
+            val servedModel = try {
+                JSONObject(body).optString("model", model)
+            } catch (_: Exception) {
+                model
+            }
+            lastServedModel = servedModel
+            Log.i("OpenAiCompatibleClient", "translateBubbles served by model: $servedModel (provider: $provider)")
 
             val content = extractChatResponseContent(body)
             val translations = parseTranslationsJson(content)
