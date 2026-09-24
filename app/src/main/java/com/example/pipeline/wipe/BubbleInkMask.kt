@@ -234,17 +234,94 @@ object BubbleInkMask {
         // is still a guess — the inset is floored when no stroke was found — so it is reached only
         // when the ink itself gave the classifier nothing to work with, and never in preference to
         // a classification that succeeded.
+        //
+        // A guess is only as good as whatever can be held against it, and this is the one path with
+        // nothing: the wall did not close, so no enclosure says where the bubble ends, and reaching
+        // here at all means the classifier found under MIN_TEXT_PIXELS of text. Every count that
+        // could disagree with the shape is taken from the shape. So hold it against the one thing
+        // in this file that was not guessed — connectivity. Ink that runs from the region's own
+        // edge into the shape is a stroke, not lettering: a glyph is an island in paper, while a
+        // stroke leaves. The fit is therefore clipped back against that ink rather than trusted, so
+        // an oversized shape can only ever erase less. Without this, a shape that overshot its box
+        // swallowed the stroke, the swallowed ink then read as interior, and the wall census went
+        // green while the stroke was repainted — the over-wipe reported as a clean wipe.
         val fitted = BubbleInterior.interiorMask(box.width, box.height, shape, wallInset)
+        val unbounded = borderConnectedInk(luminance, width, height, bgLum, isInverted)
         val interior = BooleanArray(count) { i ->
             val x = (i % width) - box.left
             val y = (i / width) - box.top
-            x in 0 until box.width && y in 0 until box.height && fitted[y * box.width + x]
+            x in 0 until box.width && y in 0 until box.height &&
+                fitted[y * box.width + x] && !unbounded[i]
         }
         val ink = inkWithin(luminance, interior, bgLum, isInverted)
         if (ink.count < MIN_TEXT_PIXELS) {
             return Plan(wallInset, interior, BooleanArray(count), false)
         }
         return Plan(wallInset, interior, dilate(ink.mask, interior, width, height, radius), true)
+    }
+
+    /**
+     * Ink that is 8-connected to the region's own edge.
+     *
+     * This is the one statement about a region that neither a shape nor the classifier can talk it
+     * out of. A glyph sits in the middle of a bubble and is an island in paper; a stroke, a tail or
+     * a piece of artwork runs from one side of the region to the other. So whatever the flood
+     * reaches from the edge is not lettering, and no fitted shape is entitled to repaint it.
+     *
+     * Seeded from the edge pixels only, so it needs no threshold beyond the ink test the rest of
+     * this file already uses, and it never consults the shape — which is the point: it is the one
+     * check that a shape which overshot cannot satisfy by construction.
+     */
+    private fun borderConnectedInk(
+        luminance: FloatArray,
+        width: Int,
+        height: Int,
+        bgLum: Float,
+        isInverted: Boolean
+    ): BooleanArray {
+        val mask = BooleanArray(luminance.size)
+        val queue = ArrayDeque<Int>()
+
+        fun isInk(i: Int): Boolean = if (isInverted) {
+            luminance[i] > bgLum + INK_TOLERANCE
+        } else {
+            luminance[i] < bgLum - INK_TOLERANCE
+        }
+
+        fun seed(i: Int) {
+            if (!mask[i] && isInk(i)) {
+                mask[i] = true
+                queue.addLast(i)
+            }
+        }
+
+        for (x in 0 until width) {
+            seed(x)
+            seed((height - 1) * width + x)
+        }
+        for (y in 0 until height) {
+            seed(y * width)
+            seed(y * width + width - 1)
+        }
+
+        while (queue.isNotEmpty()) {
+            val i = queue.removeFirst()
+            val x = i % width
+            val y = i / width
+            for (dy in -1..1) {
+                for (dx in -1..1) {
+                    val nx = x + dx
+                    val ny = y + dy
+                    if (nx !in 0 until width || ny !in 0 until height) continue
+                    val n = ny * width + nx
+                    if (!mask[n] && isInk(n)) {
+                        mask[n] = true
+                        queue.addLast(n)
+                    }
+                }
+            }
+        }
+        return mask
     }
 
     /** Repaint every set pixel of [mask] with [fillColor]. */

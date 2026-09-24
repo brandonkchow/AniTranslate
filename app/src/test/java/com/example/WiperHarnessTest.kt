@@ -261,6 +261,28 @@ class WiperHarnessTest {
                     wallBefore,
                     wallSurvived
                 )
+
+                // Every count above is measured against the interior the plan chose, so a shape
+                // that overshot reads as interior and the counts agree with the shape that made the
+                // mistake — the wall census goes green while the stroke is repainted. Anchor one
+                // claim in the image instead, where no shape can answer for it: a glyph is an
+                // island in paper and a stroke leaves the region, so ink the flood reaches from the
+                // region's own edge is not lettering and nothing may repaint it.
+                //
+                // Asserted only where no wall closed. When one did, the enclosure is the stronger
+                // anchor and the repair deliberately promotes lettering leaning on the wall — which
+                // is contiguous with the stroke, so there it is edge-connected by construction and
+                // the claim would be a false positive rather than a defect.
+                if (!enclosedBefore.found) {
+                    val anchored = edgeConnectedDarkInk(before, regionW, regionH, bgLum)
+                    assertEquals(
+                        "box $index: the wipe repainted ink connected to the region's own edge — " +
+                            "that is a stroke, not lettering, and it is the one claim no fitted " +
+                            "shape can answer",
+                        0,
+                        (0 until regionW * regionH).count { anchored[it] && plan.wipe[it] }
+                    )
+                }
                 assertEquals(
                     "box $index: ghost text left behind inside the bubble",
                     0,
@@ -308,5 +330,61 @@ class WiperHarnessTest {
             leftoverCensus.isEmpty()
         )
 
+    }
+
+    /**
+     * Dark ink 8-connected to the region's own edge, measured from the image alone.
+     *
+     * Deliberately not [BubbleInkMask]'s own helper. The harness exists to hold the decision
+     * against the pixels rather than against the decision's own bookkeeping, so this is a second,
+     * independent reading of the same fact — and it reads the pixels as they were *before* the
+     * wipe, so a wipe cannot hide what it painted by having painted it.
+     *
+     * The dark-ink reading matches the census above, which is also written for light bubbles. An
+     * inverted region would need the polarity flipped and this returns nothing either way, so it
+     * fails open rather than inventing a violation.
+     */
+    private fun edgeConnectedDarkInk(
+        pixels: IntArray,
+        width: Int,
+        height: Int,
+        bgLum: Float
+    ): BooleanArray {
+        val ink = BooleanArray(width * height) {
+            BubbleInterior.luminance(pixels[it]) < bgLum - BubbleInkMask.INK_TOLERANCE
+        }
+        val reached = BooleanArray(width * height)
+        val queue = ArrayDeque<Int>()
+
+        fun seed(i: Int) {
+            if (ink[i] && !reached[i]) {
+                reached[i] = true
+                queue.addLast(i)
+            }
+        }
+
+        for (x in 0 until width) {
+            seed(x)
+            seed((height - 1) * width + x)
+        }
+        for (y in 0 until height) {
+            seed(y * width)
+            seed(y * width + width - 1)
+        }
+
+        while (queue.isNotEmpty()) {
+            val i = queue.removeFirst()
+            val x = i % width
+            val y = i / width
+            for (dy in -1..1) {
+                for (dx in -1..1) {
+                    val nx = x + dx
+                    val ny = y + dy
+                    if (nx !in 0 until width || ny !in 0 until height) continue
+                    seed(ny * width + nx)
+                }
+            }
+        }
+        return reached
     }
 }

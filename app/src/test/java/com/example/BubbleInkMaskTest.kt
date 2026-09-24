@@ -135,4 +135,26 @@ class BubbleInkMaskTest {
             countIn(result.wipe, 56, 0, size, size)
         )
     }
+
+    @Test
+    fun `the fitted fallback must not eat a stroke that leaves the region`() {
+        // A bar too long to be lettering, running out of the region on both sides, so its ink is
+        // connected to the region's own edge: a glyph is an island in paper, a stroke leaves.
+        //
+        // The fitted fallback is the last guess in this chain. It is fitted from the box rather
+        // than measured from the image, and its inset is floored when no stroke was found, so it is
+        // the shape that can overshoot its own box. Every count in the harness agrees with the
+        // shape that made the mistake — the wall it swallowed reads as interior, so the wall
+        // census stays green while the stroke is repainted.
+        val result = plan(
+            region(intArrayOf(0, 39, size, 43, ink)),
+            frame(8, 8, 64, 64)
+        )
+
+        assertEquals(
+            "a stroke connected to the region's edge is not the fitted shape's to erase",
+            0,
+            countIn(result.wipe, 20, 38, 60, 44)
+        )
+    }
 }
