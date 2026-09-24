@@ -64,6 +64,7 @@ object BubbleTextMerger {
         vlm: List<VlmEntry>,
         textBubbles: List<DetectedRegion> = emptyList(),
         floating: List<DetectedRegion> = emptyList(),
+        enclosures: List<com.example.pipeline.wipe.EnclosureMap.Enclosure> = emptyList(),
         srcWidth: Int,
         srcHeight: Int
     ): List<MergedBubble> {
@@ -113,6 +114,11 @@ object BubbleTextMerger {
         // 2. Anything the vision slot saw but no bubble claimed is text lying on the artwork.
         //    Re-anchor it to the detector's own free-text region when one overlaps, otherwise
         //    fall back to the vision model's box so no content is silently dropped.
+        //
+        //    Defect 2 reclassification: A floating entry is only legitimate when its text lies on
+        //    open artwork; when the text centre sits inside a closed white enclosure whose area is
+        //    at least 4x the text box area, it is a missed speech bubble. It is reclassified to
+        //    SOURCE_DETECTOR with the enclosure's bounding box so the existing wipe machinery handles it.
         for ((index, entry) in vlm.withIndex()) {
             if (consumed[index]) continue
             if (entry.text.isBlank()) continue
@@ -127,18 +133,76 @@ object BubbleTextMerger {
                 entry.box
             }
 
-            merged += MergedBubble(
-                box = box,
-                text = entry.text,
-                // Here the box describes the text directly, so it is a valid direction hint.
-                vertical = inferOrientation(
-                    textBoxes = listOf(box),
-                    srcWidth = srcWidth,
-                    srcHeight = srcHeight,
-                    fallback = entry.vertical
-                ),
-                source = SOURCE_FLOATING
-            )
+            val textBoxAreaPx = (box[2] - box[0]) * srcWidth * (box[3] - box[1]) * srcHeight
+
+            // Primary: the text sits inside a closed white enclosure (centre-containment).
+            // The 4x area guard is applied to this path only — a centre hit can be a caption
+            // inside a huge panel-sized enclosure. For the displaced-box fallback below the
+            // guard is meaningless (the box is precisely what's wrong), so it is skipped.
+            val matchedEnclosure = enclosures.firstOrNull { enc ->
+                enc.containsCenter(box) || enc.containsCenter(entry.box)
+            }?.let { enc ->
+                if (textBoxAreaPx <= 0f || enc.area >= 4f * textBoxAreaPx) enc else null
+            } ?: run {
+                // Fallback (job-15 class): the detector typed the region "floating" but the box it
+                // returned is displaced from the real bubble — the text's *enclosure* is the
+                // nearest one that no detector bubble claimed. Only entries the detector itself
+                // anchored as floating take this path; with no detector region at all the VLM box
+                // is the only evidence, so no enclosure is adopted. Edge-gap distance and
+                // mutual-nearest keep this from stealing a genuine caption's neighbour. The
+                // primary path's area guard is deliberately dropped here: a displaced floating
+                // box can be far larger than its true text, so its area proves nothing.
+                val unclaimed = if (anchor != null) {
+                    enclosures.filter { enc ->
+                        bubbles.none { DetectorPostProcess.containsCenter(it.box, enc.normalizedBounds) }
+                    }
+                } else {
+                    emptyList()
+                }
+                fun edgeGap(a: List<Float>, b: List<Float>): Float {
+                    val dx = maxOf(0f, maxOf(a[0], b[0]) - minOf(a[2], b[2]))
+                    val dy = maxOf(0f, maxOf(a[1], b[1]) - minOf(a[3], b[3]))
+                    return dx * dx + dy * dy
+                }
+                val candidate = unclaimed.minByOrNull { edgeGap(it.normalizedBounds, box) }
+                // edgeGap is in normalized squared units; keep the radius normalized too
+                // (0.25 of the page's larger dimension).
+                val radius = 0.25f
+                candidate?.takeIf { enc ->
+                    edgeGap(enc.normalizedBounds, box) <= radius * radius &&
+                        unclaimed.none { other ->
+                            other !== enc && edgeGap(other.normalizedBounds, box) < edgeGap(enc.normalizedBounds, box)
+                        }
+                }
+            }
+            val isMissedBubble = matchedEnclosure != null
+
+            if (isMissedBubble) {
+                merged += MergedBubble(
+                    box = matchedEnclosure!!.normalizedBounds,
+                    text = entry.text,
+                    vertical = inferOrientation(
+                        textBoxes = listOf(box),
+                        srcWidth = srcWidth,
+                        srcHeight = srcHeight,
+                        fallback = entry.vertical
+                    ),
+                    source = SOURCE_DETECTOR
+                )
+            } else {
+                merged += MergedBubble(
+                    box = box,
+                    text = entry.text,
+                    // Here the box describes the text directly, so it is a valid direction hint.
+                    vertical = inferOrientation(
+                        textBoxes = listOf(box),
+                        srcWidth = srcWidth,
+                        srcHeight = srcHeight,
+                        fallback = entry.vertical
+                    ),
+                    source = SOURCE_FLOATING
+                )
+            }
         }
 
         return merged.sortedWith(DetectorPostProcess.readingOrderComparator { it.box })

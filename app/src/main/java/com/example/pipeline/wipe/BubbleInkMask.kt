@@ -146,75 +146,58 @@ object BubbleInkMask {
         val radius = (1.5f * densityScale).toInt().coerceIn(1, 3)
 
         // The detector's box, lifted into the region's coordinates, intersected with the measured
-        // interior when the segmenter supplied one. Only pixels inside this are ever candidates for
-        // repainting: the stroke, the bubble tail, and whatever artwork the box corners clipped all
-        // live outside it and are never touched.
+        // interior when the segmenter supplied one.
         //
-        // A detection box is where the detector *believes* the text is, and it is not always bounded
-        // by the bubble — an over-tall box clips the artwork below the bubble, the classifier then
-        // reads that artwork as strokes of its own, and it gets painted. The measured interior is
-        // the one statement about the bubble's extent that the classifier cannot outvote, so folding
-        // it in *here* makes every gate below — the ink candidates, the erase bounds, the enclosure
-        // promotion, the fitted fallback — take its authority from the measurement at once, and
-        // none of them can be left behind on the box. With no mask the intersection is a no-op and
-        // the box is the authority, exactly as before.
+        // When a measured interior is supplied (bubbleMask != null), that measurement is the authority
+        // on where the bubble is: ink inside bubbleMask is text by construction, and the wall/glyph
+        // classifier and dilate bounds must never reach outside bubbleMask. When bubbleMask == null,
+        // the detector's box remains the authority, exactly as before.
         require(bubbleMask == null || bubbleMask.size >= count) {
             "bubble mask needs $count values, got ${bubbleMask?.size}"
         }
-        val boxMask = BooleanArray(count) { i ->
+        val rawBoxMask = BooleanArray(count) { i ->
             val x = (i % width) - box.left
             val y = (i / width) - box.top
-            x in 0 until box.width && y in 0 until box.height &&
-                (bubbleMask == null || bubbleMask[i])
+            x in 0 until box.width && y in 0 until box.height
+        }
+        val candidateBounds = if (bubbleMask != null) bubbleMask else rawBoxMask
+        val boxMask = candidateBounds
+
+        // When a measured bubble interior is provided, it is the outer wall of protection:
+        // any ink inside bubbleMask is text, and dilate bounds never extend outside it.
+        if (bubbleMask != null) {
+            val inside = inkWithin(luminance, bubbleMask, bgLum, isInverted)
+            if (inside.count >= MIN_TEXT_PIXELS) {
+                val glyph = GlyphErase.wipe(inside.mask, bubbleMask, width, height, box, radius)
+                val glyphMask = BooleanArray(count) { i ->
+                    bubbleMask[i] && (glyph.glyph[i] || inside.mask[i])
+                }
+                val structureMask = BooleanArray(count) { i ->
+                    bubbleMask[i] && glyph.structure[i] && !inside.mask[i]
+                }
+                val bounds = BooleanArray(count) { i -> bubbleMask[i] && !structureMask[i] }
+                return Plan(
+                    wallInset = wallInset,
+                    interior = bubbleMask,
+                    wipe = dilate(glyphMask, bounds, width, height, radius),
+                    usedInkMask = true,
+                    glyphPixels = glyphMask.count { it },
+                    structurePixels = structureMask.count { it },
+                    glyph = glyphMask,
+                    structure = structureMask
+                )
+            } else {
+                return Plan(wallInset, bubbleMask, BooleanArray(count), false)
+            }
         }
 
         // Preferred: classify the ink inside the detector's box. The box is where the detector says
         // the text is, and the classifier will not paint a pixel it did not identify as a glyph — so
         // the box needs no shape inset from a wall in order to be safe.
-        //
-        // This has to come ahead of any measured or fitted interior. An interior is a shape *around*
-        // the text, and a shape around a text block clips its corners: a plain ellipse leaves the
-        // ends of a vertical column outside itself, while every count the wipe can make agrees with
-        // the shape that made the mistake, so the wipe reports clean. A fitted interior, reached
-        // when no wall closes, is that same guess with nothing to check it. The ink's own answer
-        // needs neither, so both shapes now run only when classification finds nothing to act on.
         val boxInk = inkWithin(luminance, boxMask, bgLum, isInverted)
         if (boxInk.count >= MIN_TEXT_PIXELS) {
             val glyph = GlyphErase.wipe(boxInk.mask, boxMask, width, height, box, radius)
             if (glyph.glyphPixels >= MIN_TEXT_PIXELS) {
-                // A component verdict is all-or-nothing, so it has to be conservative about any
-                // blob it cannot split: Japanese that leans on the stroke is one 8-connected blob
-                // with the wall, the blob is structure, and the lettering rides along with the wall
-                // that has to be kept. That is a bubble wiped white on the left and still Japanese
-                // on the right, with every count in this file agreeing the wipe came out clean.
-                //
-                // A measured interior settles this outright, so it is taken ahead of the topology
-                // guess below and does not depend on the wall closing. Ink inside the measured
-                // bubble interior, inside the box, is text by construction — the same promotion the
-                // topology enclosure makes, except measured rather than inferred. That is what lifts
-                // lettering the component verdict had to leave as structure because it leans on the
-                // stroke, and it cannot reach the stroke itself: the wall lies outside the interior
-                // being promoted from, so it keeps the protection it already had.
-                if (bubbleMask != null) {
-                    val inside = inkWithin(luminance, boxMask, bgLum, isInverted)
-                    val glyphMask = BooleanArray(count) { i ->
-                        boxMask[i] && (glyph.glyph[i] || inside.mask[i])
-                    }
-                    val structureMask = BooleanArray(count) { i ->
-                        boxMask[i] && glyph.structure[i] && !inside.mask[i]
-                    }
-                    val bounds = BooleanArray(count) { i -> boxMask[i] && !structureMask[i] }
-                    return Plan(
-                        wallInset = wallInset,
-                        interior = boxMask,
-                        wipe = dilate(glyphMask, bounds, width, height, radius),
-                        usedInkMask = true,
-                        glyphPixels = glyphMask.count { it },
-                        structurePixels = structureMask.count { it },
-                        glyph = glyphMask,
-                        structure = structureMask
-                    )
-                }
 
                 // Topology splits what connectivity cannot. The wall is contiguous with the page,
                 // so the paper it encloses cannot contain it — ink inside that enclosure, inside
