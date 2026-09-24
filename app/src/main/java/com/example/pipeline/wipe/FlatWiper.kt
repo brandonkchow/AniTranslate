@@ -39,6 +39,17 @@ object FlatWiper {
         val bmpHeight = sourceBitmap.height
         val densityScale = max(1.0f, max(bmpWidth, bmpHeight) / 1000f)
 
+        // One full-page enclosure measurement per page, taken from the *source* so the glyphs it
+        // reads are the ones the detector saw. The map is the authority on where each bubble's
+        // interior really is — including lobes of a merged balloon that lie outside the detector's
+        // rectangle — and is what lets the plan below wipe past a tight box without ever crossing
+        // a wall. Measured once here rather than per bubble: the flood is page-wide by design,
+        // because a bubble's extent is a property of the page, not of any box.
+        val pagePixels = IntArray(bmpWidth * bmpHeight)
+        sourceBitmap.getPixels(pagePixels, 0, bmpWidth, 0, 0, bmpWidth, bmpHeight)
+        val pageLuminance = FloatArray(pagePixels.size) { BubbleInterior.luminance(pagePixels[it]) }
+        val enclosureMap = EnclosureMap.build(pageLuminance, bmpWidth, bmpHeight)
+
         for (bubble in bubbles) {
             if (!bubble.visible) continue
 
@@ -85,6 +96,23 @@ object FlatWiper {
             val pixels = IntArray(regionW * regionH)
             resultBitmap.getPixels(pixels, 0, regionW, regionLeft, regionTop, regionW, regionH)
 
+            // The enclosure covering this box's centre, if any, lifted into region coordinates.
+            // Supplied as the plan's measured interior: ink inside it is text by construction, so
+            // the wipe may reach past the detector's rectangle — but never past this mask, which
+            // ends at the wall. A box whose centre fell on artwork or between lobes wipes exactly
+            // as before, on the box alone.
+            val enclosure = enclosureMap.findEnclosureForBoxCenter(
+                listOf(bubble.x1, bubble.y1, bubble.x2, bubble.y2)
+            )
+            val bubbleMask: BooleanArray? = enclosure?.let { enc ->
+                BooleanArray(regionW * regionH) { i ->
+                    val gx = (i % regionW) + regionLeft
+                    val gy = (i / regionW) + regionTop
+                    val id = enclosureMap.enclosureIds[gy * bmpWidth + gx]
+                    id == enc.id
+                }
+            }
+
             val plan = BubbleInkMask.plan(
                 pixels,
                 regionW,
@@ -98,7 +126,8 @@ object FlatWiper {
                     width = boxW,
                     height = boxH,
                     inset = boxInset
-                )
+                ),
+                bubbleMask
             )
 
             if (plan.usedInkMask) {

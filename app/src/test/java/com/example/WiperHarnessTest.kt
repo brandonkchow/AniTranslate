@@ -3,6 +3,7 @@ package com.example
 import com.example.pipeline.wipe.BubbleInkMask
 import com.example.pipeline.wipe.BubbleInterior
 import com.example.pipeline.wipe.EnclosedInterior
+import com.example.pipeline.wipe.EnclosureMap
 import java.io.File
 import javax.imageio.ImageIO
 import org.junit.Assert.assertEquals
@@ -76,6 +77,10 @@ class WiperHarnessTest {
         val densityScale = maxOf(1.0f, maxOf(width, height) / 1000f)
         println("[harness] page ${width}x$height, densityScale=$densityScale")
 
+        val fullLum = FloatArray(width * height) { BubbleInterior.luminance(canvasPixels[it]) }
+        val enclosureMap = EnclosureMap.build(fullLum, width, height)
+        val allInteriors = BooleanArray(width * height)
+
         // One box failing must not hide the other nine: collect them and report the lot after the
         // image is written, so a failing run still leaves an artifact to look at.
         val leftoverCensus = mutableListOf<String>()
@@ -88,6 +93,12 @@ class WiperHarnessTest {
 
             val boxW = right - left
             val boxH = bottom - top
+
+            val enc = enclosureMap.findEnclosureForBoxCenter(listOf(box.x1, box.y1, box.x2, box.y2))
+            val effLeft = if (enc != null) minOf(left, enc.pixelBounds[0]) else left
+            val effTop = if (enc != null) minOf(top, enc.pixelBounds[1]) else top
+            val effRight = if (enc != null) maxOf(right, enc.pixelBounds[2]) else right
+            val effBottom = if (enc != null) maxOf(bottom, enc.pixelBounds[3]) else bottom
 
             // Sample the fill colour from the detector's own box, exactly as FlatWiper does: the
             // widened region below reaches out onto the artwork.
@@ -102,12 +113,12 @@ class WiperHarnessTest {
             val margin = if (box.type.lowercase() in setOf("floating", "side_text")) {
                 0
             } else {
-                EnclosedInterior.measurementMargin(boxW, boxH)
+                EnclosedInterior.measurementMargin(effRight - effLeft, effBottom - effTop)
             }
-            val regionLeft = (left - margin).coerceAtLeast(0)
-            val regionTop = (top - margin).coerceAtLeast(0)
-            val regionRight = (right + margin).coerceAtMost(width)
-            val regionBottom = (bottom + margin).coerceAtMost(height)
+            val regionLeft = (effLeft - margin).coerceAtLeast(0)
+            val regionTop = (effTop - margin).coerceAtLeast(0)
+            val regionRight = (effRight + margin).coerceAtMost(width)
+            val regionBottom = (effBottom + margin).coerceAtMost(height)
             val regionW = regionRight - regionLeft
             val regionH = regionBottom - regionTop
 
@@ -120,6 +131,18 @@ class WiperHarnessTest {
                     y * regionW,
                     regionW
                 )
+            }
+
+            val bubbleMask = if (enc != null) {
+                BooleanArray(regionW * regionH) { i ->
+                    val rx = i % regionW
+                    val ry = i / regionW
+                    val gx = regionLeft + rx
+                    val gy = regionTop + ry
+                    enclosureMap.enclosureIds[gy * width + gx] == enc.id
+                }
+            } else {
+                null
             }
 
             val shape = BubbleInterior.shapeFor(boxW.toFloat() / boxH.toFloat(), box.type)
@@ -143,8 +166,17 @@ class WiperHarnessTest {
                     width = boxW,
                     height = boxH,
                     inset = boxInset
-                )
+                ),
+                bubbleMask
             )
+
+            for (ry in 0 until regionH) {
+                for (rx in 0 until regionW) {
+                    if (plan.interior[ry * regionW + rx]) {
+                        allInteriors[(regionTop + ry) * width + (regionLeft + rx)] = true
+                    }
+                }
+            }
 
             val before = region.copyOf()
             if (plan.usedInkMask) {
@@ -330,6 +362,34 @@ class WiperHarnessTest {
             leftoverCensus.isEmpty()
         )
 
+        val modifiedOutsideInteriors = (0 until width * height).count { !allInteriors[it] && canvasPixels[it] != original[it] }
+        assertEquals(
+            "Outside interior regions, pixels must be completely unmodified (SSIM 1.0)",
+            0,
+            modifiedOutsideInteriors
+        )
+
+        // For Job 13, assert zero visible residual inside the formerly-surviving region (lower lobe 0.613..0.743)
+        if (pagePath!!.contains("13")) {
+            val box4Enclosure = enclosureMap.findEnclosureForBoxCenter(listOf(0.347f, 0.511f, 0.500f, 0.613f))
+            org.junit.Assert.assertNotNull("box 4 must find an enclosure", box4Enclosure)
+            val ry1 = (0.613f * height).toInt()
+            val ry2 = (0.743f * height).toInt()
+            var formerlySurvivingResidual = 0
+            for (y in ry1 until ry2) {
+                for (x in 0 until width) {
+                    val p = y * width + x
+                    if (enclosureMap.enclosureIds[p] == box4Enclosure!!.id) {
+                        val lum = BubbleInterior.luminance(canvasPixels[p])
+                        if (lum < visibleResidualLuminance) {
+                            formerlySurvivingResidual++
+                        }
+                    }
+                }
+            }
+            println("[harness] Job 13 formerly-surviving residual count: $formerlySurvivingResidual")
+            assertEquals("formerly surviving lower lobe of box 4 must have zero visible residual", 0, formerlySurvivingResidual)
+        }
     }
 
     /**

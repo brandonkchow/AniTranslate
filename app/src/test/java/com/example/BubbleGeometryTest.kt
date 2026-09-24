@@ -42,6 +42,25 @@ class BubbleGeometryTest {
         const val OCR_TOP_LEFT = "なんだよそれ\n主なんじゃね！？"
         const val OCR_BOTTOM_RIGHT = "肉のことはいいから\nみんな逃げろ！"
 
+        // --- job-15 regression lock (floating text displaced from its bubble) ---------------
+        // Job-15 page: 1448x2048. Values measured on the real failing page.
+        const val J15_W = 1448
+        const val J15_H = 2048
+
+        // The detector typed the region "floating" with this box — displaced ~0.2 page-widths
+        // right of the real bubble, which is why the shipped pipeline missed it entirely.
+        val J15_FLOATING = DetectedRegion("text_free", 0.8f, listOf(0.28f, 0.80f, 0.45f, 0.88f))
+
+        // The real bubble's enclosure, measured from the page pixels (norm 0.010,0.704,0.140,0.875).
+        val J15_ENCLOSURE = com.example.pipeline.wipe.EnclosureMap.Enclosure(
+            id = 1,
+            area = 48930,
+            pixelBounds = intArrayOf(14, 1442, 203, 1792),
+            normalizedBounds = listOf(0.010f, 0.704f, 0.140f, 0.875f)
+        )
+
+        const val J15_TEXT = "なるほどこれは重症ですね"
+
         // --- what the vision slot actually returned: uniform, undersized, all "vertical" ---
         val VISION_OUTPUT = listOf(
             BubbleTextMerger.VlmEntry(OCR_TOP_RIGHT, listOf(0.640f, 0.070f, 0.760f, 0.175f), vertical = true),
@@ -216,6 +235,64 @@ class BubbleGeometryTest {
         assertTrue(merged.isEmpty())
     }
 
+    @Test
+    fun `floating entry inside enclosure of area 4x or greater is reclassified to detector bubble`() {
+        // Defect 2 (job 15): text emitted as floating with a small box around caption area
+        // when sitting inside a closed white speech bubble enclosure >= 4x the text box area.
+        val textEntry = BubbleTextMerger.VlmEntry("なるほどこれは重症ですね", listOf(0.45f, 0.55f, 0.55f, 0.65f))
+        val textBoxAreaPx = (0.55f - 0.45f) * PAGE_W * (0.65f - 0.55f) * PAGE_H // 0.1 * 800 * 0.1 * 1200 = 9600 px
+
+        val largeEnclosure = com.example.pipeline.wipe.EnclosureMap.Enclosure(
+            id = 1,
+            area = (textBoxAreaPx * 4.5f).toInt(),
+            pixelBounds = intArrayOf(320, 600, 480, 840),
+            normalizedBounds = listOf(0.40f, 0.50f, 0.60f, 0.70f)
+        )
+
+        val merged = BubbleTextMerger.merge(
+            bubbles = emptyList(),
+            vlm = listOf(textEntry),
+            enclosures = listOf(largeEnclosure),
+            srcWidth = PAGE_W,
+            srcHeight = PAGE_H
+        )
+
+        assertEquals(1, merged.size)
+        assertEquals(BubbleTextMerger.SOURCE_DETECTOR, merged[0].source)
+        assertEquals(largeEnclosure.normalizedBounds, merged[0].box)
+        assertEquals("なるほどこれは重症ですね", merged[0].text)
+    }
+
+    @Test
+    fun `floating entry inside small enclosure under 4x area stays floating`() {
+        // The centre-containment primary path must keep its 4x area guard: a small enclosure
+        // that hugs the text box is the text itself (caption lettering), not a missed bubble.
+        // NOTE: this test passes NO floating region — with one, the displaced-box fallback
+        // (job-15 path) would legitimately claim the nearest unclaimed enclosure regardless
+        // of area, because a displaced floating box's area proves nothing.
+        val textEntry = BubbleTextMerger.VlmEntry("なるほどこれは重症ですね", listOf(0.45f, 0.55f, 0.55f, 0.65f))
+        val textBoxAreaPx = (0.55f - 0.45f) * PAGE_W * (0.65f - 0.55f) * PAGE_H
+
+        val smallEnclosure = com.example.pipeline.wipe.EnclosureMap.Enclosure(
+            id = 1,
+            area = (textBoxAreaPx * 2.0f).toInt(), // < 4x area
+            pixelBounds = intArrayOf(320, 600, 480, 840),
+            normalizedBounds = listOf(0.40f, 0.50f, 0.60f, 0.70f)
+        )
+
+        val merged = BubbleTextMerger.merge(
+            bubbles = emptyList(),
+            vlm = listOf(textEntry),
+            enclosures = listOf(smallEnclosure),
+            srcWidth = PAGE_W,
+            srcHeight = PAGE_H
+        )
+
+        assertEquals(1, merged.size)
+        assertEquals(BubbleTextMerger.SOURCE_FLOATING, merged[0].source)
+        assertEquals(listOf(0.45f, 0.55f, 0.55f, 0.65f), merged[0].box)
+    }
+
     // ------------------------------------------------------------------ post-processing
 
     @Test
@@ -331,5 +408,48 @@ class BubbleGeometryTest {
         assertEquals("bubble", OnnxBubbleDetector.LABEL_BUBBLE)
         assertEquals("text_bubble", OnnxBubbleDetector.LABEL_TEXT_BUBBLE)
         assertEquals("text_free", OnnxBubbleDetector.LABEL_TEXT_FREE)
+    }
+
+    // --- regression locks for the job-15 class: floating text displaced from its bubble -------
+
+    @Test
+    fun `a floating entry displaced from its bubble reclassifies onto the nearest unclaimed enclosure`() {
+        val merged = BubbleTextMerger.merge(
+            bubbles = emptyList(),
+            vlm = listOf(BubbleTextMerger.VlmEntry(text = J15_TEXT, box = J15_FLOATING.box, vertical = true)),
+            floating = listOf(J15_FLOATING),
+            enclosures = listOf(J15_ENCLOSURE),
+            srcWidth = J15_W,
+            srcHeight = J15_H
+        )
+
+        assertEquals(1, merged.size)
+        val bubble = merged[0]
+        assertEquals(BubbleTextMerger.SOURCE_DETECTOR, bubble.source)
+        assertEquals(J15_ENCLOSURE.normalizedBounds, bubble.box)
+        assertEquals(J15_TEXT, bubble.text)
+    }
+
+    @Test
+    fun `a floating entry with no nearby enclosure stays floating`() {
+        // Same page geometry, but the only enclosure is a detector-claimed bubble far away.
+        val merged = BubbleTextMerger.merge(
+            bubbles = listOf(
+                DetectedRegion(
+                    "bubble",
+                    0.9f,
+                    listOf(0.80f, 0.02f, 0.98f, 0.18f)
+                )
+            ),
+            vlm = listOf(BubbleTextMerger.VlmEntry(text = "スンッ…", box = listOf(0.02f, 0.03f, 0.1f, 0.1f), vertical = false)),
+            floating = listOf(DetectedRegion("text_free", 0.7f, listOf(0.02f, 0.03f, 0.1f, 0.1f))),
+            enclosures = listOf(J15_ENCLOSURE),
+            srcWidth = J15_W,
+            srcHeight = J15_H
+        )
+
+        assertEquals(2, merged.size)
+        val floatingOut = merged.first { it.text == "スンッ…" }
+        assertEquals(BubbleTextMerger.SOURCE_FLOATING, floatingOut.source)
     }
 }

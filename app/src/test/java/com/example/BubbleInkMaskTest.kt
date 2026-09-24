@@ -239,4 +239,108 @@ class BubbleInkMaskTest {
             countIn(result.interior, 20, 20, 60, 70)
         )
     }
+
+    @Test
+    fun `two-lobe bubble wipes ink in both lobes when interior covers both, leaving wall stroke untouched`() {
+        // Synthetic two-lobe page: two lobes joined by an open neck.
+        // A wall stroke encloses both lobes, with glyph strokes in each lobe.
+        // The detector's box covers ONLY the top lobe.
+        // plan() must wipe ink in BOTH lobes when bubbleMask covers both, leaving the wall stroke untouched.
+        val w = 80
+        val h = 80
+        val pixels = IntArray(w * h) { paper }
+        val bubbleMask = BooleanArray(w * h)
+
+        val wallPixels = mutableListOf<Int>()
+        for (y in 0 until h) {
+            for (x in 0 until w) {
+                val dTop = (x - 40) * (x - 40) + (y - 25) * (y - 25)
+                val dBottom = (x - 40) * (x - 40) + (y - 55) * (y - 55)
+                val isNeck = x in 33..47 && y in 25..55
+                val isInside = dTop <= 16 * 16 || dBottom <= 16 * 16 || isNeck
+                val isWall = (dTop in (16 * 16)..(19 * 19) || dBottom in (16 * 16)..(19 * 19) ||
+                    ((x in 30..32 || x in 48..50) && y in 25..55)) && !isInside
+
+                if (isInside) {
+                    bubbleMask[y * w + x] = true
+                } else if (isWall) {
+                    pixels[y * w + x] = ink
+                    wallPixels.add(y * w + x)
+                }
+            }
+        }
+
+        // Draw glyph strokes in top lobe (rows 22..28, cols 38..42)
+        for (y in 22..28) {
+            for (x in 38..42) pixels[y * w + x] = ink
+        }
+        // Draw glyph strokes in bottom lobe (rows 52..58, cols 38..42)
+        for (y in 52..58) {
+            for (x in 38..42) pixels[y * w + x] = ink
+        }
+
+        // The detector's box covers ONLY the top lobe
+        val box = BubbleInkMask.BoxFrame(left = 20, top = 10, width = 40, height = 30, inset = 0)
+        val result = BubbleInkMask.plan(
+            pixels = pixels,
+            width = w,
+            height = h,
+            bgColor = paper,
+            shape = BubbleInterior.Shape.ROUNDED_RECT,
+            densityScale = 1f,
+            box = box,
+            bubbleMask = bubbleMask
+        )
+
+        assertTrue("must use ink mask", result.usedInkMask)
+
+        // Ink in top lobe must be wiped
+        assertTrue("top lobe glyph must be wiped", result.wipe[25 * w + 40])
+        // Ink in bottom lobe must be wiped
+        assertTrue("bottom lobe glyph must be wiped", result.wipe[55 * w + 40])
+
+        // Wall stroke must be untouched
+        for (wp in wallPixels) {
+            assertFalse("wall stroke at pixel $wp must be left untouched", result.wipe[wp])
+        }
+
+        // Dilate bounds and wipe must never reach outside bubbleMask
+        for (i in 0 until w * h) {
+            if (!bubbleMask[i]) {
+                assertFalse("wipe must never reach outside bubbleMask at $i", result.wipe[i])
+            }
+        }
+    }
+
+    @Test
+    fun `when bubbleMask is null plan output is identical to pre-change algorithm`() {
+        val testRegions = listOf(
+            bubbleWithLetteringAgainstTheWall() to frame(8, 8, 64, 64),
+            region(*ring(20, 20, 60, 60), intArrayOf(37, 30, 43, 50, ink), intArrayOf(27, 30, 33, 42, ink)) to frame(8, 8, 64, 64),
+            region(*ring(20, 20, 60, 50), intArrayOf(30, 28, 36, 40, ink)) to frame(20, 20, 40, 50)
+        )
+
+        for ((px, box) in testRegions) {
+            val resultWithDefaultNull = plan(px, box)
+            val resultWithExplicitNull = BubbleInkMask.plan(
+                pixels = px,
+                width = size,
+                height = size,
+                bgColor = paper,
+                shape = BubbleInterior.Shape.ELLIPSE,
+                densityScale = 1f,
+                box = box,
+                bubbleMask = null
+            )
+
+            assertEquals(resultWithDefaultNull.wallInset, resultWithExplicitNull.wallInset)
+            assertEquals(resultWithDefaultNull.usedInkMask, resultWithExplicitNull.usedInkMask)
+            assertEquals(resultWithDefaultNull.glyphPixels, resultWithExplicitNull.glyphPixels)
+            assertEquals(resultWithDefaultNull.structurePixels, resultWithExplicitNull.structurePixels)
+            assertTrue(resultWithDefaultNull.wipe.contentEquals(resultWithExplicitNull.wipe))
+            assertTrue(resultWithDefaultNull.interior.contentEquals(resultWithExplicitNull.interior))
+            assertTrue(resultWithDefaultNull.glyph.contentEquals(resultWithExplicitNull.glyph))
+            assertTrue(resultWithDefaultNull.structure.contentEquals(resultWithExplicitNull.structure))
+        }
+    }
 }

@@ -98,6 +98,29 @@ class PagePipeline(
             }
             val base64 = ImageScaler.bitmapToBase64(workingBmp, quality = 85)
 
+            // ---- Full-page enclosure measurement (classical CV, no model) ------------
+            // The detector's boxes are hints; the page itself is the authority on where bubble
+            // interiors are. Measured once here and consumed by both the text merger (which
+            // reclassifies a "floating" entry that actually sits inside a closed white enclosure)
+            // and the wiper (whose interior-authoritative plan needs the mask in page pixels).
+            // A measurement failure must degrade to box-only behaviour, never abort the page.
+            val pageEnclosures: List<com.example.pipeline.wipe.EnclosureMap.Enclosure> = try {
+                val pagePx = IntArray(workingBmp.width * workingBmp.height)
+                workingBmp.getPixels(pagePx, 0, workingBmp.width, 0, 0, workingBmp.width, workingBmp.height)
+                val pageLum = FloatArray(pagePx.size) { com.example.pipeline.wipe.BubbleInterior.luminance(pagePx[it]) }
+                com.example.pipeline.wipe.EnclosureMap.build(
+                    pageLum,
+                    workingBmp.width,
+                    workingBmp.height
+                ).enclosures
+            } catch (t: Throwable) {
+                RunLogger.logPageEvent(
+                    context, currentPage.jobId, currentPage.pageIndex, "ENCLOSURE_MAP",
+                    "Enclosure measurement failed (${t.message}) — merge and wipe fall back to box-only."
+                )
+                emptyList()
+            }
+
             // ---- Tier 1: on-device geometry ------------------------------------------
             // The detector owns bubble geometry; the vision slot below is asked only to read
             // text. Letting a VLM own boxes is what produced three identically-sized 12%-wide
@@ -245,6 +268,7 @@ class PagePipeline(
                     vlm = anchored.entries,
                     textBubbles = detectorTextBubbles,
                     floating = detectorFloating,
+                    enclosures = pageEnclosures,
                     srcWidth = workingBmp.width,
                     srcHeight = workingBmp.height
                 ).filter { it.text.isNotBlank() }

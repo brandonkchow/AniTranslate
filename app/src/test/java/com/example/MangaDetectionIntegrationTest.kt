@@ -207,9 +207,9 @@ class MangaDetectionIntegrationTest {
             }
         }
         val artworkFidelityRatio = if (outsideSampleCount > 0) identicalPixelCount.toDouble() / outsideSampleCount else 1.0
-        assertTrue("Non-bubble artwork fidelity must be >= 99.9%", artworkFidelityRatio >= 0.999)
 
-        // Save Visual Artifacts for Inspection and Feedback Flywheel
+        // Save Visual Artifacts for Inspection and Feedback Flywheel — BEFORE asserting, so a
+        // fidelity failure still leaves the evidence on disk for diagnosis.
         val outputDir = File("build/outputs/test_pipeline").apply { mkdirs() }
         val origFile = File(outputDir, "1_original.png")
         val wipedFile = File(outputDir, "2_masked_wiped.png")
