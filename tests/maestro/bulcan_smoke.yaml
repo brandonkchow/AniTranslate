@@ -1,0 +1,14 @@
+appId: com.aistudio.bubbleforge.mngtr
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Add Images"
+    timeout: 15000
+- assertVisible: "Add Images"
+- assertVisible: "Manga OCR & Editorial Typesetter"
+- takeScreenshot: anitranslate-home
+- tapOn: "Settings"
+- assertVisible: "API & Provider Settings"
+- takeScreenshot: anitranslate-settings
+- tapOn: "Back"
+- assertVisible: "Add Images"
