@@ -16,6 +16,14 @@ class OpenAiCompatibleClient {
     @Volatile
     var lastServedModel: String? = null
 
+    /** Local slots (CUSTOM / WORKSTATION) run on our hardware and answer in minutes, not seconds. */
+    private fun clientFor(provider: ApiProvider) =
+        if (provider == ApiProvider.CUSTOM || provider == ApiProvider.WORKSTATION) {
+            HttpClientProvider.localClient
+        } else {
+            HttpClientProvider.client
+        }
+
     suspend fun testKey(baseUrl: String, apiKey: String, provider: ApiProvider): Result<String> = withContext(Dispatchers.IO) {
         try {
             val cleanBase = baseUrl.trim().removeSuffix("/")
@@ -31,7 +39,7 @@ class OpenAiCompatibleClient {
                 requestBuilder.addHeader("X-Title", "Bubbleforge")
             }
 
-            val response = HttpClientProvider.client.newCall(requestBuilder.build()).execute()
+            val response = clientFor(provider).newCall(requestBuilder.build()).execute()
             val code = response.code
             val body = response.body?.string().orEmpty()
 
@@ -149,7 +157,7 @@ class OpenAiCompatibleClient {
                 requestBuilder.addHeader("X-Title", "Bubbleforge")
             }
 
-            val response = HttpClientProvider.client.newCall(requestBuilder.build()).execute()
+            val response = clientFor(provider).newCall(requestBuilder.build()).execute()
             val code = response.code
             val body = response.body?.string().orEmpty()
 
@@ -277,7 +285,7 @@ class OpenAiCompatibleClient {
                 requestBuilder.addHeader("X-Title", "Bubbleforge")
             }
 
-            val response = HttpClientProvider.client.newCall(requestBuilder.build()).execute()
+            val response = clientFor(provider).newCall(requestBuilder.build()).execute()
             val code = response.code
             val body = response.body?.string().orEmpty()
 
@@ -382,7 +390,7 @@ class OpenAiCompatibleClient {
                 requestBuilder.addHeader("X-Title", "Bubbleforge")
             }
 
-            val response = HttpClientProvider.client.newCall(requestBuilder.build()).execute()
+            val response = clientFor(provider).newCall(requestBuilder.build()).execute()
             val code = response.code
             val body = response.body?.string().orEmpty()
 

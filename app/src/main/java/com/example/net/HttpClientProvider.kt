@@ -13,4 +13,17 @@ object HttpClientProvider {
             .retryOnConnectionFailure(true)
             .build()
     }
+
+    /**
+     * Local-provider variant (CUSTOM / WORKSTATION slots): a CPU- or LAN-hosted
+     * model can take minutes per page, far past the cloud-tuned 90s call cap.
+     * Cloud providers keep the short timeout so a hung API fails fast.
+     */
+    val localClient: OkHttpClient by lazy {
+        client.newBuilder()
+            .readTimeout(20, TimeUnit.MINUTES)
+            .writeTimeout(20, TimeUnit.MINUTES)
+            .callTimeout(20, TimeUnit.MINUTES)
+            .build()
+    }
 }
