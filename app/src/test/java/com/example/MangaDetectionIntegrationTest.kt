@@ -399,35 +399,4 @@ class MangaDetectionIntegrationTest {
         assertTrue("Story context must contain previous dialogue for pronoun resolution", storyContext.contains("legendary hero"))
         assertTrue(storyContext.contains("Who are you?"))
     }
-
-    @Test
-    fun testLiveOrMockGeminiCallWithConfiguredKey() = runBlocking {
-        val key = try {
-            BuildConfig.GEMINI_API_KEY.takeIf { it.isNotBlank() && it != "MY_GEMINI_API_KEY" }
-        } catch (e: Throwable) {
-            null
-        }
-
-        if (key != null) {
-            val (testBmp, sourceInfo) = loadTestBitmap()
-            println("[TEST] Detection test source: $sourceInfo")
-            val base64 = ImageScaler.bitmapToBase64(testBmp, quality = 80)
-            val result = geminiClient.detectBubbles(
-                baseUrl = "https://generativelanguage.googleapis.com/v1beta",
-                apiKey = key,
-                model = "gemini-2.5-flash",
-                imageBase64 = base64
-            )
-
-            // If internet/network is reachable in JVM test environment, verify detection
-            if (result.isSuccess) {
-                val bubbles = result.getOrNull().orEmpty()
-                println("[TEST] Detected ${bubbles.size} bubbles from source:")
-                bubbles.forEachIndexed { i, b ->
-                    println("[TEST]  Bubble #$i [${b.box.joinToString()}]: \"${b.text}\"")
-                }
-                assertTrue(bubbles.isNotEmpty())
-            }
-        }
-    }
 }

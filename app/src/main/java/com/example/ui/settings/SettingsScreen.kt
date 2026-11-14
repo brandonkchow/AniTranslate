@@ -56,6 +56,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
@@ -99,6 +100,7 @@ import com.example.data.slots.CatalogModel
 import com.example.data.slots.ModelCapability
 import com.example.data.slots.ModelWalk
 import com.example.data.slots.SlotRole
+import com.example.pipeline.read.BaberuModelManager
 import com.example.utils.RunLogEntry
 import com.example.ui.theme.EditorialAmber
 import com.example.ui.theme.EditorialCanvas
@@ -132,6 +134,7 @@ fun SettingsScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val testResults by viewModel.testResults.collectAsStateWithLifecycle()
+    val baberuState by viewModel.baberuState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
     var showAddSlotDialog by remember { mutableStateOf(false) }
@@ -249,6 +252,13 @@ fun SettingsScreen(
             // Gemini API Quota & Rate Limit Telemetry Dashboard
             GeminiUsageDashboard(
                 initiallyExpanded = true
+            )
+
+            // On-device Baberu OCR Model Card
+            BaberuOcrModelCard(
+                state = baberuState,
+                onDownload = { viewModel.downloadBaberuModels(forceRedownload = false) },
+                onRedownload = { viewModel.downloadBaberuModels(forceRedownload = true) }
             )
 
             // API Slots Header with Actions
@@ -1482,5 +1492,129 @@ fun AddSlotDialog(
         }
     )
 }
+
+@Composable
+private fun BaberuOcrModelCard(
+    state: BaberuModelManager.State,
+    onDownload: () -> Unit,
+    onRedownload: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("baberu_ocr_model_card"),
+        colors = CardDefaults.cardColors(
+            containerColor = EditorialSurfaceAlt
+        ),
+        shape = RoundedCornerShape(14.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, EditorialSurfaceBorder.copy(alpha = 0.4f))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "BABERU OCR MODEL",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.sp,
+                        color = EditorialLavender
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    val statusText = when (state) {
+                        is BaberuModelManager.State.NotDownloaded -> "Not downloaded (122 MB)"
+                        is BaberuModelManager.State.Downloading -> {
+                            val pct = (state.progress * 100).toInt().coerceIn(0, 100)
+                            val filePart = if (state.currentFile.isNotBlank()) " (${state.currentFile})" else ""
+                            "Downloading $pct%$filePart"
+                        }
+                        is BaberuModelManager.State.Ready -> "Ready (122 MB)"
+                        is BaberuModelManager.State.Failed -> "Failed: ${state.message}"
+                    }
+                    val statusColor = when (state) {
+                        is BaberuModelManager.State.Ready -> EditorialSuccess
+                        is BaberuModelManager.State.Failed -> EditorialCrimsonText
+                        else -> EditorialTextSecondary
+                    }
+                    Text(
+                        text = statusText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = statusColor,
+                        modifier = Modifier.testTag("baberu_ocr_status_text")
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                when (state) {
+                    is BaberuModelManager.State.NotDownloaded -> {
+                        Button(
+                            onClick = onDownload,
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = EditorialLavender,
+                                contentColor = EditorialDeepViolet
+                            ),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier.testTag("baberu_download_button")
+                        ) {
+                            Text("Download", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    is BaberuModelManager.State.Downloading -> {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.5.dp,
+                            color = EditorialLavender
+                        )
+                    }
+                    is BaberuModelManager.State.Ready -> {
+                        OutlinedButton(
+                            onClick = onRedownload,
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier.testTag("baberu_redownload_button")
+                        ) {
+                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Re-download", fontSize = 12.sp)
+                        }
+                    }
+                    is BaberuModelManager.State.Failed -> {
+                        Button(
+                            onClick = onRedownload,
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = EditorialCrimson,
+                                contentColor = Color.White
+                            ),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier.testTag("baberu_redownload_button")
+                        ) {
+                            Text("Re-download", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+
+            if (state is BaberuModelManager.State.Downloading) {
+                LinearProgressIndicator(
+                    progress = { state.progress.coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = EditorialLavender
+                )
+            }
+        }
+    }
+}
+
 
 

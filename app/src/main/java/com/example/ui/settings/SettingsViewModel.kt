@@ -13,6 +13,7 @@ import com.example.data.slots.SlotRole
 import com.example.data.slots.SlotStorage
 import com.example.net.GeminiClient
 import com.example.net.OpenAiCompatibleClient
+import com.example.pipeline.read.BaberuModelManager
 import com.example.utils.RunLogEntry
 import com.example.utils.RunLogger
 import kotlinx.coroutines.Dispatchers
@@ -52,6 +53,15 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private val slotStorage = SlotStorage.getInstance(application)
     private val geminiClient = GeminiClient()
     private val openAiClient = OpenAiCompatibleClient()
+    private val baberuModelManager = BaberuModelManager.getInstance(application)
+
+    val baberuState: StateFlow<BaberuModelManager.State> = baberuModelManager.state
+
+    fun downloadBaberuModels(forceRedownload: Boolean = false) {
+        viewModelScope.launch {
+            baberuModelManager.downloadAll(forceRedownload = forceRedownload)
+        }
+    }
 
     private val _testResults = MutableStateFlow<Map<String, SlotTestResult>>(emptyMap())
     val testResults: StateFlow<Map<String, SlotTestResult>> = _testResults.asStateFlow()
