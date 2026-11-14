@@ -83,7 +83,16 @@ class PagePipeline(
             }
         }
         return try {
-            val result = keyRouter.executeWithSlot(stage, slot, block = block)
+            // Local providers run on CPU/LAN hardware where one call legitimately
+            // takes tens of minutes (measured 25m for a full-page detect on wuwei,
+            // 2026-11-13); the router's 60s attempt timeout would discard that
+            // completed response as a timeout. Cloud slots keep the 60s cap.
+            val attemptTimeoutMs = if (slot.provider == ApiProvider.CUSTOM || slot.provider == ApiProvider.WORKSTATION) {
+                LOCAL_ATTEMPT_TIMEOUT_MS
+            } else {
+                KeyRouter.DEFAULT_ATTEMPT_TIMEOUT_MS
+            }
+            val result = keyRouter.executeWithSlot(stage, slot, timeoutMs = attemptTimeoutMs, block = block)
             val elapsedMs = System.currentTimeMillis() - startTimeMs
             Pair(result, elapsedMs)
         } finally {
@@ -914,4 +923,5 @@ private data class ErrorDisposition(
 
 // Backward-compatible default attempt limits
 private const val MAX_TRANSLATE_SLOT_ATTEMPTS = KeyRouter.DEFAULT_MAX_ATTEMPTS
+private const val LOCAL_ATTEMPT_TIMEOUT_MS = 60L * 60L * 1000L
 private const val MAX_DETECT_SLOT_ATTEMPTS = KeyRouter.DEFAULT_MAX_ATTEMPTS
