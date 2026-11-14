@@ -22,21 +22,12 @@ data class Bubble(
     val height: Float get() = (y2 - y1).coerceAtLeast(0.01f)
 
     /**
-     * Whether this region holds text that is *not* inside a speech balloon — sound effects,
-     * onomatopoeia, signage, captions floating over artwork.
+     * Whether this region holds text the pipeline leaves exactly as drawn.
      *
-     * Such text is out of scope for the pipeline and is left exactly as drawn, for two independent
-     * reasons that both bite in the same direction:
-     *
-     * - **No background to restore.** "Repaint the text in the background colour" is only defined
-     *   when there *is* one uniform background. An effect lettered over line art has none, so any
-     *   fill smudges the artwork underneath.
-     * - **No wall to bound the wipe.** Without an enclosed interior the region's extent is whatever
-     *   box the detector drew, and a box that merely overlaps an effect used to erase it outright.
-     *
-     * A region the text merger reclassified into a *measured* enclosure is promoted to `bubble`
-     * before either stage sees it, so genuine wall-less dialogue still flows through the wipe and
-     * the typesetter normally.
+     * `floating` (detector `text_free`) is NOT in this set any more: the Commander
+     * ruled 2026-11-14 (BACKLOG:13) that free text outside a bubble is translated,
+     * with the wipe/write extent derived from the Japanese text block's own box
+     * and the English fitted inside it. Only `side_text` remains out of scope.
      */
     val isNonBalloon: Boolean get() = type.lowercase() in NON_BALLOON_TYPES
 
@@ -56,8 +47,8 @@ data class Bubble(
     }
 
     companion object {
-        /** Types whose text sits outside any balloon: never wiped, never typeset. */
-        val NON_BALLOON_TYPES = setOf("floating", "side_text")
+        /** Types whose text sits outside any balloon and stays untranslated: never wiped, never typeset. */
+        val NON_BALLOON_TYPES = setOf("side_text")
 
         fun fromJson(json: JSONObject, fallbackId: Int = 1): Bubble {
             val id = when {

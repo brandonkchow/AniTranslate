@@ -107,7 +107,10 @@ class WipeBalloonScopeTest {
         // silently compare the wiped page against itself.
         val before = src.copy(Bitmap.Config.ARGB_8888, false)
         val dialogue = Bubble(id = 1, text = "テスト", box = boxNorm(balloonRect), type = "bubble")
-        val effect = Bubble(id = 2, text = "ドカッ", box = boxNorm(artworkRect), type = "floating")
+        // Out-of-scope lettering (side_text) is what must stay untouched now:
+        // since the Commander ruling of 2026-11-14 (BACKLOG:13), `floating`
+        // (detector text_free) IS wiped and rewritten inside its own extent.
+        val effect = Bubble(id = 2, text = "ドカッ", box = boxNorm(artworkRect), type = "side_text")
 
         val wiped = runBlocking { FlatWiper.wipeBubbles(src, listOf(dialogue, effect)) }
         val mutated = (0 until pageW step 7).sumOf { x ->

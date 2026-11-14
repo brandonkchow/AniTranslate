@@ -34,10 +34,8 @@ object Typesetter {
         for (bubble in bubbles) {
             if (!bubble.visible) continue
 
-            // Non-balloon text is left untranslated: the wiper deliberately keeps the source text
-            // (there is no uniform background to restore it against), and painting English over
-            // kept Japanese effects is worse than no translation at all. A wall-less region the
-            // merger reclassified into a measured enclosure arrives here as "bubble".
+            // Out-of-scope types only (side_text). Free text (floating, detector
+            // text_free) is typeset inside its own extent box (BACKLOG:13).
             if (bubble.isNonBalloon) continue
 
             val rawText = bubble.translated.ifBlank { bubble.text }
@@ -60,15 +58,23 @@ object Typesetter {
                 rawText
             }
 
-            // Elliptical safety inset: Speech bubbles are oval, so horizontal padding is wider near corners
-            val horizontalPadding = (boxWidth * (if (aspectRatio < 0.7f) 0.12f else 0.15f)).coerceAtLeast(4f * densityScale)
-            val verticalPadding = (boxHeight * 0.10f).coerceAtLeast(4f * densityScale)
+            val isFloating = bubble.type.equals("floating", ignoreCase = true)
+
+            // Elliptical safety inset: Speech bubbles are oval, so horizontal padding is wider near corners.
+            // A free-text extent is the Japanese block itself (BACKLOG:13): no oval inset,
+            // the full box is the write area, and text is fitted inside it.
+            val horizontalPadding = if (isFloating) (boxWidth * 0.04f).coerceAtLeast(2f * densityScale)
+                else (boxWidth * (if (aspectRatio < 0.7f) 0.12f else 0.15f)).coerceAtLeast(4f * densityScale)
+            val verticalPadding = if (isFloating) (boxHeight * 0.04f).coerceAtLeast(2f * densityScale)
+                else (boxHeight * 0.10f).coerceAtLeast(4f * densityScale)
 
             val availableWidth = (boxWidth - (horizontalPadding * 2)).toInt().coerceAtLeast(16)
             val availableHeight = (boxHeight - (verticalPadding * 2)).coerceAtLeast(16f)
 
-            // Dynamic maxLines based on aspect ratio
+            // Dynamic maxLines based on aspect ratio (free text may wrap tighter
+            // inside its small extent rather than grow out of it)
             val maxLines = when {
+                isFloating && aspectRatio < 0.6f -> 10
                 aspectRatio < 0.6f -> 8
                 aspectRatio < 0.9f -> 6
                 aspectRatio > 1.8f -> 3
@@ -76,16 +82,40 @@ object Typesetter {
             }
 
             val baseSizePx = bubble.fontSizeSp * densityScale * (if (isShout) 1.10f else 1.0f)
-            val (optimalLayout, optimalPaint) = calculateBestLayoutBinarySearch(
+            var (optimalLayout, optimalPaint) = calculateBestLayoutBinarySearch(
                 text = text,
                 availableWidth = availableWidth,
                 availableHeight = availableHeight,
                 maxSizePx = baseSizePx * 1.30f,
-                minSizePx = (baseSizePx * 0.40f).coerceAtLeast(9f * densityScale),
+                minSizePx = if (isFloating) (baseSizePx * 0.25f).coerceAtLeast(6f * densityScale)
+                    else (baseSizePx * 0.40f).coerceAtLeast(9f * densityScale),
                 typeface = typeface,
                 maxLines = maxLines,
                 isShout = isShout
             )
+
+            // Shrink-to-fit second pass (BACKLOG:13): a unit whose text still does
+            // not fit at the normal minimum size is searched again down to a 4px
+            // floor with more lines, so the English is fitted inside the extent
+            // (smaller, but whole) instead of overflowing or being amputated.
+            // Units that already fit never reach this branch, so accepted pages
+            // keep the exact size they had.
+            if (optimalLayout.height > availableHeight) {
+                val (fittedLayout, fittedPaint) = calculateBestLayoutBinarySearch(
+                    text = text,
+                    availableWidth = availableWidth,
+                    availableHeight = availableHeight,
+                    maxSizePx = optimalPaint.textSize,
+                    minSizePx = 4f,
+                    typeface = typeface,
+                    maxLines = maxLines * 3,
+                    isShout = isShout
+                )
+                if (fittedLayout.height < optimalLayout.height) {
+                    optimalLayout = fittedLayout
+                    optimalPaint = fittedPaint
+                }
+            }
 
             // Dual-Pass Rendering:
             // Pass 1: Crisp white outer stroke halo (guarantees readability on screentones & dark art)
@@ -106,8 +136,19 @@ object Typesetter {
                 .setMaxLines(maxLines)
                 .build()
 
-            // Draw centered within the bubble: Stroke first, then solid fill
+            // Draw centered within the unit's extent: Stroke first, then solid fill.
+            // Render check (BACKLOG:13): flag any layout that could not be fitted
+            // inside its extent even at the minimum size, then clip the draw to
+            // the extent so no glyph is ever painted outside it.
+            if (optimalLayout.height > availableHeight || optimalLayout.width > availableWidth) {
+                android.util.Log.w(
+                    "Typesetter",
+                    "bubble #${bubble.id} type=${bubble.type} does not fit its extent: " +
+                        "layout ${optimalLayout.width}x${optimalLayout.height} > available ${availableWidth}x${availableHeight.toInt()} — clipped to extent"
+                )
+            }
             canvas.save()
+            canvas.clipRect(leftPx, topPx, rightPx, bottomPx)
             val textLayoutHeight = optimalLayout.height.toFloat()
             val textLayoutWidth = optimalLayout.width.toFloat()
             val drawX = leftPx + (boxWidth - textLayoutWidth) / 2f

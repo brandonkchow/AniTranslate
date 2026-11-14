@@ -40,12 +40,30 @@ object FlatWiper {
         for (bubble in bubbles) {
             if (!bubble.visible) continue
 
-            // Balloon interiors only. Text that sits on artwork — effects, onomatopoeia, signage,
-            // captions — is left exactly as drawn: it has no uniform background to repaint it
-            // with, and no wall to bound a wipe, so any attempt smudges the line art underneath.
-            // A region the merger reclassified into a *measured* enclosure arrives here typed
-            // "bubble", so wall-less dialogue that is genuinely inside a balloon still wipes.
+            // Out-of-scope types only (side_text). Free text (floating) is handled
+            // by the extent-box branch below (BACKLOG:13).
             if (bubble.isNonBalloon) continue
+
+            // Free text (detector text_free, BACKLOG:13): there is no balloon wall
+            // or measured enclosure to wipe within, so the wipe extent is the
+            // Japanese text block's own box and nothing beyond it. Fill exactly
+            // that rectangle with the colour sampled inside it; the typesetter
+            // writes the English back into the same extent.
+            if (bubble.type.equals("floating", ignoreCase = true)) {
+                val fLeft = (bubble.x1 * bmpWidth).toInt().coerceIn(0, bmpWidth - 1)
+                val fTop = (bubble.y1 * bmpHeight).toInt().coerceIn(0, bmpHeight - 1)
+                val fRight = (bubble.x2 * bmpWidth).toInt().coerceIn(fLeft + 1, bmpWidth)
+                val fBottom = (bubble.y2 * bmpHeight).toInt().coerceIn(fTop + 1, bmpHeight)
+                val fW = fRight - fLeft
+                val fH = fBottom - fTop
+                if (fW > 2 && fH > 2) {
+                    val boxPixels = IntArray(fW * fH)
+                    resultBitmap.getPixels(boxPixels, 0, fW, fLeft, fTop, fW, fH)
+                    val fill = BubbleInkMask.sampleInteriorColor(boxPixels, fW, fH)
+                    resultBitmap.setPixels(IntArray(fW * fH) { fill }, 0, fW, fLeft, fTop, fW, fH)
+                }
+                continue
+            }
 
             val leftPx = (bubble.x1 * bmpWidth).toInt().coerceIn(0, bmpWidth - 1)
             val topPx = (bubble.y1 * bmpHeight).toInt().coerceIn(0, bmpHeight - 1)

@@ -133,6 +133,33 @@ object BubbleTextMerger {
                 entry.box
             }
 
+            // Detector-anchored free text (BACKLOG:13): when the detector itself
+            // drew a text_free region for this text, that region plus the text
+            // block is the unit's extent. It must not be adopted into a
+            // neighbouring enclosure as a "missed bubble": on page 4 that moved
+            // the English into an enclosure over the character's face while the
+            // Japanese column outside the enclosure was never wiped. The wipe
+            // and the write both use this extent, and nothing beyond it.
+            // Exception: text whose centre sits inside a much larger enclosure
+            // is inside a real balloon the detector missed — the primary
+            // centre-containment reclassification below still applies to it.
+            if (anchor != null) {
+                val areaPx = (box[2] - box[0]) * srcWidth * (box[3] - box[1]) * srcHeight
+                val contained = enclosures.any { enc ->
+                    (enc.containsCenter(box) || enc.containsCenter(entry.box)) &&
+                        (areaPx <= 0f || enc.area >= 4f * areaPx)
+                }
+                if (!contained) {
+                    merged += BubbleTextMerger.MergedBubble(
+                        box = box,
+                        text = entry.text,
+                        vertical = inferOrientation(listOf(box), srcWidth, srcHeight, entry.vertical),
+                        source = BubbleTextMerger.SOURCE_FLOATING
+                    )
+                    continue
+                }
+            }
+
             val textBoxAreaPx = (box[2] - box[0]) * srcWidth * (box[3] - box[1]) * srcHeight
 
             // Primary: the text sits inside a closed white enclosure (centre-containment).
@@ -144,14 +171,10 @@ object BubbleTextMerger {
             }?.let { enc ->
                 if (textBoxAreaPx <= 0f || enc.area >= 4f * textBoxAreaPx) enc else null
             } ?: run {
-                // Fallback (job-15 class): the detector typed the region "floating" but the box it
-                // returned is displaced from the real bubble — the text's *enclosure* is the
-                // nearest one that no detector bubble claimed. Only entries the detector itself
-                // anchored as floating take this path; with no detector region at all the VLM box
-                // is the only evidence, so no enclosure is adopted. Edge-gap distance and
-                // mutual-nearest keep this from stealing a genuine caption's neighbour. The
-                // primary path's area guard is deliberately dropped here: a displaced floating
-                // box can be far larger than its true text, so its area proves nothing.
+                // Fallback (job-15 class): text the detector did not anchor anywhere
+                // may still sit in an unclaimed enclosure. Detector-anchored free
+                // text never reaches here any more (BACKLOG:13 branch above), so
+                // `unclaimed` is empty in practice and no enclosure is adopted.
                 val unclaimed = if (anchor != null) {
                     enclosures.filter { enc ->
                         bubbles.none { DetectorPostProcess.containsCenter(it.box, enc.normalizedBounds) }

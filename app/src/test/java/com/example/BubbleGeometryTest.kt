@@ -413,7 +413,16 @@ class BubbleGeometryTest {
     // --- regression locks for the job-15 class: floating text displaced from its bubble -------
 
     @Test
-    fun `a floating entry displaced from its bubble reclassifies onto the nearest unclaimed enclosure`() {
+    fun `a floating entry near an unclaimed enclosure stays floating on its own extent`() {
+        // Superseded 2026-11-14 (BACKLOG:13, page 4): this used to lock the job-15
+        // reclassification onto the nearest unclaimed enclosure. That premise
+        // belonged to cloud-vision entries, whose boxes could be displaced from
+        // the glyphs. Baberu entries are detector crops — the glyphs are inside
+        // the entry box by construction — and adopting a neighbouring enclosure
+        // moved page 4's English onto the character's face while its Japanese
+        // column stayed unwiped. Anchored free text now keeps its own extent;
+        // only centre-containment into a much larger enclosure (the primary
+        // path) still reclassifies a missed bubble.
         val merged = BubbleTextMerger.merge(
             bubbles = emptyList(),
             vlm = listOf(BubbleTextMerger.VlmEntry(text = J15_TEXT, box = J15_FLOATING.box, vertical = true)),
@@ -425,8 +434,8 @@ class BubbleGeometryTest {
 
         assertEquals(1, merged.size)
         val bubble = merged[0]
-        assertEquals(BubbleTextMerger.SOURCE_DETECTOR, bubble.source)
-        assertEquals(J15_ENCLOSURE.normalizedBounds, bubble.box)
+        assertEquals(BubbleTextMerger.SOURCE_FLOATING, bubble.source)
+        assertEquals(J15_FLOATING.box, bubble.box)
         assertEquals(J15_TEXT, bubble.text)
     }
 

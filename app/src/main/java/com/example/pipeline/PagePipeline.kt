@@ -60,6 +60,30 @@ class PagePipeline(
                 baseUrl.trim()
             }
         }
+
+        /**
+         * Page identity for derived working images (BACKLOG:11, 2026-11-14).
+         * The working copy is keyed by page id AND the SHA-256 of the page's own
+         * original file. Keying by id alone silently reused a previous page's
+         * working image whenever an id ever mapped to a different original
+         * (rerun, reimport, subset render): detection and OCR then ran on the
+         * old page while wipe/typeset drew onto the new one.
+         */
+        fun workingFileName(pageId: Long, contentHash: String): String =
+            "working_${pageId}_${contentHash.take(16)}.jpg"
+
+        fun contentHash(file: File): String {
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            file.inputStream().use { input ->
+                val buffer = ByteArray(64 * 1024)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    digest.update(buffer, 0, read)
+                }
+            }
+            return digest.digest().joinToString("") { "%02x".format(it) }
+        }
     }
 
     private val slotStorage: SlotStorage by lazy { SlotStorage.getInstance(context) }
@@ -148,8 +172,10 @@ class PagePipeline(
             return@withContext currentPage
         }
 
-        // 1. Prepare working scaled image if not yet created
-        val workingFile = File(context.cacheDir, "working_${currentPage.id}.jpg")
+        // 1. Prepare working scaled image if not yet created. The file name binds
+        // this page id to the hash of its own original (BACKLOG:11): a stale
+        // working image from a different original under the same id is never reused.
+        val workingFile = File(context.cacheDir, workingFileName(currentPage.id, contentHash(origFile)))
         if (!workingFile.exists()) {
             val origBmp = ImageScaler.loadBitmapFromFile(origFile)
             if (origBmp == null) {
