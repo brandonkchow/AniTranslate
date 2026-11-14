@@ -17,13 +17,16 @@ object HttpClientProvider {
     /**
      * Local-provider variant (CUSTOM / WORKSTATION slots): a CPU- or LAN-hosted
      * model can take minutes per page, far past the cloud-tuned 90s call cap.
-     * Cloud providers keep the short timeout so a hung API fails fast.
+     * Measured 2026-11-13 on wuwei: one full-page detect call took 25 minutes
+     * server-side while an emulator shared the host, so 20 minutes still caps
+     * below local reality. Cloud providers keep the short timeout so a hung
+     * API fails fast.
      */
     val localClient: OkHttpClient by lazy {
         client.newBuilder()
-            .readTimeout(20, TimeUnit.MINUTES)
-            .writeTimeout(20, TimeUnit.MINUTES)
-            .callTimeout(20, TimeUnit.MINUTES)
+            .readTimeout(60, TimeUnit.MINUTES)
+            .writeTimeout(60, TimeUnit.MINUTES)
+            .callTimeout(60, TimeUnit.MINUTES)
             .build()
     }
 }
