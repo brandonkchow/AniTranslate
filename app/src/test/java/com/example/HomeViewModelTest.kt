@@ -59,9 +59,20 @@ class HomeViewModelTest {
                 ApiSlot(provider = ApiProvider.GEMINI, apiKey = "key1", enabled = true, role = SlotRole.ANY)
             )
         )
-        assertTrue(readyState.hasVisionKey)
+        // Reading is on-device (Baberu): a single Gemini translate-role key gates.
         assertTrue(readyState.hasTranslateKey)
         assertTrue(readyState.canTranslate)
+
+        val nonGeminiState = HomeUiState(
+            selectedImages = listOf(
+                SelectedImageItem(id = "1", uri = Uri.parse("file:///tmp/img1.png"), name = "img1.png")
+            ),
+            slots = listOf(
+                ApiSlot(provider = ApiProvider.GROQ, apiKey = "key1", enabled = true, role = SlotRole.ANY)
+            )
+        )
+        assertFalse(nonGeminiState.hasTranslateKey)
+        assertFalse(nonGeminiState.canTranslate)
     }
 
     @Test

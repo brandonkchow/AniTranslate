@@ -103,14 +103,14 @@ class JobManager(
                 (p.status == PageStatus.WAITING && (p.waitingUntilEpochMs <= now || p.waitingUntilEpochMs == 0L))
             }
 
-            // Check slot availability for pending work
-            val (visionSlot, visionWaitTime) = keyRouter.getAvailableSlot(com.example.pipeline.router.PipelineStage.DETECT_OCR)
+            // Slot availability: translation only. Detect + OCR run on-device
+            // (Baberu), so no cloud slot gates a page that still needs reading.
             val (translateSlot, translateWaitTime) = keyRouter.getAvailableSlot(com.example.pipeline.router.PipelineStage.TRANSLATE)
 
             // Check if any pages or slots are currently cooling down / waiting
             val waitingPages = pages.filter { it.status == PageStatus.WAITING && it.waitingUntilEpochMs > now }
             val earliestWaitTime = waitingPages.minOfOrNull { it.waitingUntilEpochMs }
-                ?: listOfNotNull(visionWaitTime, translateWaitTime).filter { it > now }.minOrNull()
+                ?: listOfNotNull(translateWaitTime).filter { it > now }.minOrNull()
 
             if (earliestWaitTime != null && earliestWaitTime > now) {
                 val remainingSec = kotlin.math.max(1L, (earliestWaitTime - now + 999L) / 1000L)
@@ -148,13 +148,11 @@ class JobManager(
             val currentlyRunning = activePageJobs.size
             val availableSlots = maxConcurrent - currentlyRunning
 
-            // Filter only pages whose required stage currently has a ready slot (or CPU-only stage)
+            // Pages still needing reading are always ready (on-device Baberu);
+            // only translation waits for a slot. PagePipeline enforces Gemini-only.
             val readyPages = pendingPages.filter { page ->
-                val needsDetect = page.status == PageStatus.QUEUED || (page.status == PageStatus.WAITING && page.bubblesJson.isBlank())
                 val needsTranslate = page.status == PageStatus.TRANSLATING || (page.status == PageStatus.WAITING && page.bubblesJson.isNotBlank() && page.wipedImagePath.isBlank())
-                if (needsDetect && visionSlot == null) {
-                    false
-                } else if (needsTranslate && translateSlot == null) {
+                if (needsTranslate && translateSlot == null) {
                     false
                 } else {
                     true

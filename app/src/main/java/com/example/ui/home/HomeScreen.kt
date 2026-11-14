@@ -221,7 +221,7 @@ fun HomeScreen(
                     .testTag("key_status_card")
                     .clickable { onNavigateToSettings() },
                 colors = CardDefaults.cardColors(
-                    containerColor = if (uiState.hasVisionKey && uiState.hasTranslateKey)
+                    containerColor = if (uiState.hasTranslateKey)
                         EditorialSurfaceAlt
                     else
                         EditorialCrimson.copy(alpha = 0.25f)
@@ -229,7 +229,7 @@ fun HomeScreen(
                 shape = RoundedCornerShape(14.dp),
                 border = CardDefaults.outlinedCardBorder().copy(
                     brush = androidx.compose.ui.graphics.SolidColor(
-                        if (uiState.hasVisionKey && uiState.hasTranslateKey) EditorialSurfaceBorder.copy(alpha = 0.5f)
+                        if (uiState.hasTranslateKey) EditorialSurfaceBorder.copy(alpha = 0.5f)
                         else EditorialCrimsonBorder
                     )
                 )
@@ -241,19 +241,19 @@ fun HomeScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
-                        imageVector = if (uiState.hasVisionKey && uiState.hasTranslateKey) Icons.Default.CheckCircle else Icons.Default.Info,
+                        imageVector = if (uiState.hasTranslateKey) Icons.Default.CheckCircle else Icons.Default.Info,
                         contentDescription = null,
-                        tint = if (uiState.hasVisionKey && uiState.hasTranslateKey) EditorialLavender else EditorialCrimsonLight,
+                        tint = if (uiState.hasTranslateKey) EditorialLavender else EditorialCrimsonLight,
                         modifier = Modifier.size(22.dp)
                     )
                     Spacer(modifier = Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = if (uiState.hasVisionKey && uiState.hasTranslateKey) "READY TO TRANSLATE" else "API SETUP REQUIRED",
+                            text = if (uiState.hasTranslateKey) "READY TO TRANSLATE" else "API SETUP REQUIRED",
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             letterSpacing = 1.sp,
-                            color = if (uiState.hasVisionKey && uiState.hasTranslateKey) EditorialLavender else EditorialCrimsonText
+                            color = if (uiState.hasTranslateKey) EditorialLavender else EditorialCrimsonText
                         )
                         Text(
                             text = uiState.keyStatusMessage,

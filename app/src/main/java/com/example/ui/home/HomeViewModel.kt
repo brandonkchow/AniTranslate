@@ -9,6 +9,7 @@ import com.example.data.db.AppDatabase
 import com.example.data.db.JobEntity
 import com.example.data.db.PageEntity
 import com.example.data.db.PageStatus
+import com.example.data.slots.ApiProvider
 import com.example.data.slots.ApiSlot
 import com.example.data.slots.SlotRole
 import com.example.data.slots.SlotStorage
@@ -44,32 +45,24 @@ data class HomeUiState(
     val configuredSlots: List<ApiSlot>
         get() = slots.filter { it.enabled && it.apiKey.isNotBlank() && !it.isInvalidKey }
 
-    val visionSlots: List<ApiSlot>
-        get() = configuredSlots.filter { (it.role == SlotRole.DETECT_OCR || it.role == SlotRole.ANY) && it.isVisionSupported }
-
+    // Reading (detect + OCR) runs fully on-device with Baberu — no API slot gates it.
+    // Translation is Gemini-only (PagePipeline enforces the same rule).
     val translateSlots: List<ApiSlot>
-        get() = configuredSlots.filter { it.role == SlotRole.TRANSLATE || it.role == SlotRole.ANY }
-
-    val hasVisionKey: Boolean
-        get() = visionSlots.isNotEmpty()
+        get() = configuredSlots.filter {
+            (it.role == SlotRole.TRANSLATE || it.role == SlotRole.ANY) && it.provider == ApiProvider.GEMINI
+        }
 
     val hasTranslateKey: Boolean
         get() = translateSlots.isNotEmpty()
 
     val canTranslate: Boolean
-        get() = selectedImages.isNotEmpty() && hasVisionKey && hasTranslateKey && !isCreatingJob
+        get() = selectedImages.isNotEmpty() && hasTranslateKey && !isCreatingJob
 
     val keyStatusMessage: String
         get() = when {
-            configuredSlots.isEmpty() -> "No active API keys detected. Tap here to configure Gemini or OpenRouter in Settings."
-            !hasVisionKey && !hasTranslateKey -> "Key entered, but no active role matched. Please enable vision or translate roles."
-            !hasVisionKey -> "Translation key ready (${translateSlots.firstOrNull()?.displayTitle ?: "Ready"}). Add a Vision key (e.g. Gemini 2.0 Flash) for Detect+OCR."
-            !hasTranslateKey -> "Vision key ready (${visionSlots.firstOrNull()?.displayTitle ?: "Ready"}). Add a Translation key (e.g. Nemotron / Gemini) for text translation."
-            else -> {
-                val primaryVision = visionSlots.first().displayTitle
-                val primaryTranslate = translateSlots.first().displayTitle
-                "Ready! Detect+OCR: $primaryVision · Translate: $primaryTranslate"
-            }
+            configuredSlots.isEmpty() -> "No active API keys detected. Tap here to add your Gemini key in Settings."
+            !hasTranslateKey -> "Reading is on-device (Baberu). Add a Gemini key with a Translate role to translate."
+            else -> "Ready! Reading: Baberu on-device · Translate: ${translateSlots.first().displayTitle}"
         }
 }
 

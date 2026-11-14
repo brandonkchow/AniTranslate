@@ -273,6 +273,15 @@ class PagePipeline(
                 )
             } else {
                 // Fail closed if Baberu OCR models are not Ready (no fallback, no wipe of unread text).
+                // Ready can come from mere file presence at startup, so re-verify the
+                // pinned SHA-256 hashes before reading (once per page is cheap vs OCR).
+                if (baberuModelManager.state.value is BaberuModelManager.State.Ready && !baberuModelManager.verifyAll()) {
+                    val msg = "Baberu OCR model files failed SHA-256 verification. Re-download in Settings."
+                    currentPage = currentPage.copy(status = PageStatus.FAILED, errorMessage = msg, activeSlotName = "")
+                    RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "ERROR", msg)
+                    onStatusUpdate(currentPage)
+                    return@withContext currentPage
+                }
                 when (val modelState = baberuModelManager.state.value) {
                     is BaberuModelManager.State.Ready -> Unit
                     is BaberuModelManager.State.Failed -> {
