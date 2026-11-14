@@ -324,7 +324,7 @@ class BaberuProofInstrumentedTest {
             val result = runBlocking {
                 client.translateBubbles(
                     baseUrl = "http://127.0.0.1:$STUB_PORT/v1",
-                    apiKey = "stub-key",
+                    apiKey = "stub",
                     model = "stub-1",
                     bubbles = bubbles,
                     provider = ApiProvider.GEMINI
