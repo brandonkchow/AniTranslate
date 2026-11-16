@@ -74,36 +74,13 @@ class TypesetterLayoutRobolectricTest {
             maxLines = 8,
             isShout = true
         )
-        assertEquals("shrink", choice.phase)
-        assertFalse("island must stay whole-word: ${choice.lines}", choice.hyphenated)
-        assertFalse(WordWrap.hasUnhyphenatedMidWordSplit(text, choice.lines))
-        assertEquals(listOf("Deliciousness", "alert issued!!"), choice.lines)
-    }
-
-    @Test
-    fun `low-occupancy whole-word choice is returned unchanged even when hyphenation would be larger`() {
-        // Uses measured p6u7 box geometry where whole-word shrink sits below
-        // 0.20 occupancy (~0.1968 at ~18.99px) while a hyphenated layout in
-        // the grown box would be larger. Whole-word shrink must be returned unchanged.
-        val text = "Deliciousness alert issued!!"
-        val choice = Typesetter.calculateBestLayout(
-            text = text,
-            availableWidth = 108,
-            availableHeight = 221.26592f,
-            grownWidth = 128,
-            grownHeight = 248.92416f,
-            maxSizePx = 23.70368f,
-            minSizePx = 10.656f,
-            typeface = comicTypeface(),
-            maxLines = 8,
-            isShout = true
-        )
         assertTrue(
             "test premise: whole-word choice sits below 0.20 occupancy",
             Typesetter.occupancyOf(choice, 128, 248.92416f) < 0.20
         )
         assertEquals("shrink", choice.phase)
-        assertFalse(choice.hyphenated)
+        assertFalse("island must stay whole-word: ${choice.lines}", choice.hyphenated)
+        assertFalse(WordWrap.hasUnhyphenatedMidWordSplit(text, choice.lines))
         assertEquals(listOf("Deliciousness", "alert issued!!"), choice.lines)
     }
 

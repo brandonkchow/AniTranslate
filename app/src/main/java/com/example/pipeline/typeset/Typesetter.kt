@@ -27,7 +27,6 @@ object Typesetter {
      * typeset concurrently, and a shared outcome map would leak one
      * page's distress into another page's retry decisions, bubble ids
      * being 1..N on every page). The space-aware retry loop
-     * The space-aware retry loop
      * (SpaceAwareRetry) reads it: distress is a measured typeset
      * result — below preferred size, floor phases, hyphenation, font
      * at the readable minimum, clipping — not a character-count guess.
