@@ -182,7 +182,7 @@ class MangaDetectionIntegrationTest {
         assertEquals(testBitmap.height, wipedBitmap.height)
 
         // Test Typesetter
-        val finalBitmap = Typesetter.typesetBubbles(context, wipedBitmap, sampleBubbles)
+        val finalBitmap = Typesetter.typesetBubbles(context, wipedBitmap, sampleBubbles).bitmap
         assertNotNull(finalBitmap)
         assertEquals(testBitmap.width, finalBitmap.width)
         assertEquals(testBitmap.height, finalBitmap.height)

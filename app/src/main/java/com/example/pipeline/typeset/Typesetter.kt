@@ -22,6 +22,30 @@ object Typesetter {
     internal var onLayoutDecided: ((bubbleId: Int, bubbleType: String, decidedText: String, lines: List<String>, hyphenated: Boolean, fontSizePx: Float, phase: String, lineCount: Int, occupancy: Double) -> Unit)? = null
 
     /**
+     * The layout outcome of one [typesetBubbles] call, per bubble id,
+     * returned with the bitmap (never stored on this singleton: pages
+     * typeset concurrently, and a shared outcome map would leak one
+     * page's distress into another page's retry decisions, bubble ids
+     * being 1..N on every page). The space-aware retry loop
+     * (SpaceAwareRetry) reads it: distress is a measured typeset
+     * result — floor phases, hyphenation, font at the readable
+     * minimum, clipping — not a character-count guess.
+     */
+    data class LayoutOutcome(
+        val bubbleId: Int,
+        val phase: String,
+        val hyphenated: Boolean,
+        val fontSizePx: Float,
+        val minReadablePx: Float,
+        val clipped: Boolean
+    )
+
+    data class TypesetResult(
+        val bitmap: Bitmap,
+        val outcomes: Map<Int, LayoutOutcome>
+    )
+
+    /**
      * Occupancy floor (Commander 2026-11-15): measured basis — accepted
      * pages 4/5 bubbles min 0.1688 / p10 0.2459 / median 0.6601, page-6
      * islands 0.1930 / 0.1968. F = 0.20 sits just above the island max
@@ -38,10 +62,11 @@ object Typesetter {
         context: Context,
         wipedBitmap: Bitmap,
         bubbles: List<Bubble>
-    ): Bitmap = withContext(Dispatchers.Default) {
+    ): TypesetResult = withContext(Dispatchers.Default) {
         val resultBitmap = wipedBitmap.copy(Bitmap.Config.ARGB_8888, true)
         val canvas = Canvas(resultBitmap)
         val typeface = FontHelper.getComicTypeface(context)
+        val outcomes = mutableMapOf<Int, LayoutOutcome>()
 
         val bmpW = wipedBitmap.width
         val bmpH = wipedBitmap.height
@@ -134,6 +159,14 @@ object Typesetter {
                 choice.paint.textSize, choice.phase, choice.lines.size,
                 occupancyOf(choice, grownWidth, grownHeight)
             )
+            outcomes[bubble.id] = LayoutOutcome(
+                bubbleId = bubble.id,
+                phase = choice.phase,
+                hyphenated = choice.hyphenated,
+                fontSizePx = choice.paint.textSize,
+                minReadablePx = minReadablePx,
+                clipped = optimalLayout.height > grownHeight || optimalLayout.width > grownWidth
+            )
 
             // Dual-Pass Rendering:
             // Pass 1: Crisp white outer stroke halo (guarantees readability on screentones & dark art)
@@ -182,7 +215,7 @@ object Typesetter {
             canvas.restore()
         }
 
-        resultBitmap
+        TypesetResult(resultBitmap, outcomes)
     }
 
     /** The one word-break decision for a unit: every drawn layout uses it. */

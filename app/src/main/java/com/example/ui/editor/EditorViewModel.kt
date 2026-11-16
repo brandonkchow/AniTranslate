@@ -169,7 +169,7 @@ class EditorViewModel(
                 ImageScaler.saveBitmapPng(wipedBmp, wipedFile)
 
                 // Typeset
-                val finalBmp = Typesetter.typesetBubbles(context, wipedBmp, bubbles)
+                val finalBmp = Typesetter.typesetBubbles(context, wipedBmp, bubbles).bitmap
                 val finalFile = File(context.cacheDir, "final_${page.id}.png")
                 ImageScaler.saveBitmapPng(finalBmp, finalFile)
 

@@ -25,6 +25,8 @@ import com.example.pipeline.read.BaberuModelManager
 import com.example.pipeline.read.BaberuOcrReader
 import com.example.pipeline.router.KeyRouter
 import com.example.pipeline.router.PipelineStage
+import com.example.pipeline.translate.SpaceAwareRetry
+import com.example.pipeline.typeset.BubbleBudget
 import com.example.pipeline.typeset.Typesetter
 import com.example.pipeline.wipe.FlatWiper
 import com.example.utils.RunLogger
@@ -444,6 +446,11 @@ class PagePipeline(
 
         // If no text was detected, we still create wiped and final output
         // 3. Stage 2: Translate (if not already translated or retrying translation)
+        // Space-aware retry rides the slot/model that served this page's
+        // translation; without one (pre-translated page) the retry is
+        // skipped and the typesetter's fallback order stands.
+        var retrySlot: ApiSlot? = null
+        var retryModel: String? = null
         val needsTranslation = bubbles.any { it.translated.isBlank() && it.text.isNotBlank() }
         if (needsTranslation || currentPage.lastStageAttempted == "TRANSLATE") {
             currentPage = currentPage.copy(status = PageStatus.TRANSLATING, lastStageAttempted = "TRANSLATE")
@@ -556,7 +563,8 @@ class PagePipeline(
                             candidateModel,
                             bubbles,
                             provider = ApiProvider.GEMINI,
-                            storyContext = storyContext
+                            storyContext = storyContext,
+                            budgets = BubbleBudget.budgetsFor(bubbles, currentPage.width, currentPage.height)
                         )
                     }
                     val elapsedMs = attemptElapsedMs
@@ -592,6 +600,8 @@ class PagePipeline(
                         lastStageAttempted = ""
                     )
                     onStatusUpdate(currentPage)
+                    retrySlot = slot
+                    retryModel = candidateModel
                     translationSucceeded = true
                     break
                 }
@@ -642,7 +652,92 @@ class PagePipeline(
         RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "TYPESET_START", "Typesetting manga fonts & layout")
         onStatusUpdate(currentPage)
 
-        val finalBmp = Typesetter.typesetBubbles(context, wipedBmp, bubbles)
+        var typeset = Typesetter.typesetBubbles(context, wipedBmp, bubbles)
+        var finalBmp = typeset.bitmap
+        var currentOutcomes = typeset.outcomes
+
+        // Space-aware retry (Commander 2026-11-16): distress is the
+        // typesetter's measured outcome, not a character count. Each
+        // distressed bubble is reworded once per round, at most
+        // SpaceAwareRetry.MAX_ROUNDS rounds, on the slot/model that
+        // served this page; a candidate that is not strictly shorter is
+        // rejected. After any acceptance the page is re-typeset from the
+        // same wiped bitmap, so the loop is deterministic and bounded:
+        // rounds x distressed bubbles extra calls, never a page re-run.
+        val spaceSlot = retrySlot
+        val spaceModel = retryModel
+        if (spaceSlot != null && spaceModel != null) {
+            val pageBudgets = BubbleBudget.budgetsFor(bubbles, origBmp.width, origBmp.height)
+            for (round in 1..SpaceAwareRetry.MAX_ROUNDS) {
+                val outcomes = currentOutcomes
+                val distressed = bubbles.filter { b ->
+                    b.visible && !b.isNonBalloon && b.translated.isNotBlank() &&
+                        (SpaceAwareRetry.isDistressed(outcomes[b.id]) ||
+                            (pageBudgets[b.id]?.let { b.translated.length > it.hardChars } == true))
+                }
+                if (distressed.isEmpty()) break
+                var changed = false
+                val acceptedIds = mutableListOf<Int>()
+                for (b in distressed) {
+                    val budget = pageBudgets[b.id] ?: continue
+                    val target = SpaceAwareRetry.targetChars(budget, round)
+                    val result = try {
+                        openAiClient.translateBubbles(
+                            resolveGeminiOpenAiBaseUrl(spaceSlot.baseUrl),
+                            spaceSlot.apiKey,
+                            spaceModel,
+                            listOf(b),
+                            provider = ApiProvider.GEMINI,
+                            storyContext = SpaceAwareRetry.pageContext(bubbles),
+                            budgets = mapOf(b.id to budget),
+                            retryInstruction = SpaceAwareRetry.retryInstruction(b, target, round)
+                        )
+                    } catch (e: Exception) {
+                        Result.failure(e)
+                    }
+                    val candidate = result.getOrNull()?.get(b.id)
+                    val accepted = candidate?.takeIf { SpaceAwareRetry.accepts(b.translated, it) }
+                    if (accepted != null) {
+                        RunLogger.logPageEvent(
+                            context, currentPage.jobId, currentPage.pageIndex, "SPACE_RETRY",
+                            "Bubble #${b.id} reworded round $round: ${b.translated.length} -> ${accepted.length} chars (target $target)"
+                        )
+                        bubbles = bubbles.map { if (it.id == b.id) it.copy(translated = accepted) else it }
+                        acceptedIds.add(b.id)
+                        changed = true
+                    } else {
+                        RunLogger.logPageEvent(
+                            context, currentPage.jobId, currentPage.pageIndex, "SPACE_RETRY",
+                            "Bubble #${b.id} round $round: candidate rejected (not shorter), standing text kept"
+                        )
+                    }
+                }
+                if (!changed) break
+                typeset = Typesetter.typesetBubbles(context, wipedBmp, bubbles)
+                // Acceptance was provisional: a shorter string can typeset
+                // worse. Revert any accepted unit whose new outcome is
+                // worse on measured axes, then re-typeset once more.
+                val worse = acceptedIds.filter { id ->
+                    SpaceAwareRetry.madeWorse(outcomes[id], typeset.outcomes[id])
+                }
+                if (worse.isNotEmpty()) {
+                    val standing = distressed.associate { it.id to it.translated }
+                    bubbles = bubbles.map { b ->
+                        if (b.id in worse) b.copy(translated = standing[b.id] ?: b.translated) else b
+                    }
+                    RunLogger.logPageEvent(
+                        context, currentPage.jobId, currentPage.pageIndex, "SPACE_RETRY",
+                        "Round $round: reverted ${worse.size} rewording(s) that typeset worse: $worse"
+                    )
+                    typeset = Typesetter.typesetBubbles(context, wipedBmp, bubbles)
+                }
+                finalBmp = typeset.bitmap
+                currentOutcomes = typeset.outcomes
+                currentPage = currentPage.copy(bubblesJson = Bubble.listToJsonString(bubbles))
+                onStatusUpdate(currentPage)
+            }
+        }
+
         val finalFile = File(context.cacheDir, "final_${currentPage.id}.png")
         ImageScaler.saveBitmapPng(finalBmp, finalFile)
 

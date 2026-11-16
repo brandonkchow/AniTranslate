@@ -97,7 +97,7 @@ class TypesetRenderProofTest {
                 FileOutputStream(File(outDir, "${page}_wiped.jpg")).use {
                     wiped.compress(Bitmap.CompressFormat.JPEG, 92, it)
                 }
-                runBlocking { Typesetter.typesetBubbles(context, wiped, bubbles) }
+                runBlocking { Typesetter.typesetBubbles(context, wiped, bubbles) }.bitmap
             } finally {
                 Typesetter.onLayoutDecided = null
             }

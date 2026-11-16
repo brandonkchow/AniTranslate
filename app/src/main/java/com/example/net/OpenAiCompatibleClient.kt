@@ -61,38 +61,18 @@ class OpenAiCompatibleClient {
         bubbles: List<Bubble>,
         provider: ApiProvider,
         storyContext: String = "",
-        fallbackModels: List<String> = emptyList()
+        fallbackModels: List<String> = emptyList(),
+        budgets: Map<Int, com.example.pipeline.typeset.BubbleBudget.Budget> = emptyMap(),
+        retryInstruction: String = ""
     ): Result<Map<Int, String>> = withContext(Dispatchers.IO) {
         if (bubbles.isEmpty()) return@withContext Result.success(emptyMap())
         try {
             val cleanBase = baseUrl.trim().removeSuffix("/")
             val url = "$cleanBase/chat/completions"
 
-            val inputList = JSONArray().apply {
-                bubbles.forEach { b ->
-                    put(JSONObject().apply {
-                        put("id", b.id)
-                        put("text", b.text)
-                    })
-                }
-            }
+            val inputList = JSONArray(buildTranslateInput(bubbles, budgets))
 
-            val contextSection = if (storyContext.isNotBlank()) {
-                "\nStory / Previous Page Context for continuity:\n$storyContext\n"
-            } else ""
-
-            val systemPrompt = """
-                You are a master manga localizer and comic translator.
-                Translate the following Japanese manga dialogue into natural, punchy, conversational English.
-                $contextSection
-                Rules:
-                - Holistic Translation: Translate all bubbles in the sequence as a single scene.
-                - Pronoun & Subject Resolution: Resolve omitted Japanese subjects (e.g. 私, 俺, 貴方, 彼, 彼女) and implicit pronouns based on context and conversational flow.
-                - Character Voice & Tone: Preserve unique character personalities, comedic timing, emotional cadence, and shouting intensity.
-                - Keep dialogue punchy and lettering-friendly.
-                - Return ONLY valid JSON in format:
-                {"items":[{"id":1,"translated":"..."}]}
-            """.trimIndent()
+            val systemPrompt = buildTranslateSystemPrompt(storyContext, budgets.isNotEmpty(), retryInstruction)
 
             val requestJson = JSONObject().apply {
                 put("model", model.trim())
@@ -156,6 +136,53 @@ class OpenAiCompatibleClient {
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    internal fun buildTranslateInput(
+        bubbles: List<Bubble>,
+        budgets: Map<Int, com.example.pipeline.typeset.BubbleBudget.Budget>
+    ): String {
+        val arr = JSONArray()
+        bubbles.forEach { b ->
+            arr.put(JSONObject().apply {
+                put("id", b.id)
+                put("text", b.text)
+                budgets[b.id]?.let { budget ->
+                    put("maxChars", budget.preferredChars)
+                    put("hardMaxChars", budget.hardChars)
+                }
+            })
+        }
+        return arr.toString()
+    }
+
+    internal fun buildTranslateSystemPrompt(
+        storyContext: String,
+        hasBudgets: Boolean,
+        retryInstruction: String
+    ): String {
+        val contextSection = if (storyContext.isNotBlank()) {
+            "\nStory / Previous Page Context for continuity:\n$storyContext\n"
+        } else ""
+        val budgetSection = if (hasBudgets) {
+            """
+            - Bubble Space Budgets: each input item may carry maxChars (the length that fits its speech bubble at a comfortable lettering size — aim at or under it) and hardMaxChars (the absolute ceiling at the smallest readable size — never exceed it). When space is tight, prefer shorter common words and drop filler before dropping meaning; keep names, tone and the core meaning.
+            """.trimIndent()
+        } else ""
+        val retrySection = if (retryInstruction.isNotBlank()) "\n$retryInstruction" else ""
+        return """
+            You are a master manga localizer and comic translator.
+            Translate the following Japanese manga dialogue into natural, punchy, conversational English.
+            $contextSection
+            Rules:
+            - Holistic Translation: Translate all bubbles in the sequence as a single scene.
+            - Pronoun & Subject Resolution: Resolve omitted Japanese subjects (e.g. 私, 俺, 貴方, 彼, 彼女) and implicit pronouns based on context and conversational flow.
+            - Character Voice & Tone: Preserve unique character personalities, comedic timing, emotional cadence, and shouting intensity.
+            - Keep dialogue punchy and lettering-friendly.
+            $budgetSection
+            - Return ONLY valid JSON in format:
+            {"items":[{"id":1,"translated":"..."}]}$retrySection
+        """.trimIndent()
     }
 
     private fun extractChatResponseContent(body: String): String {
