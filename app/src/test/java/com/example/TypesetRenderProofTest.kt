@@ -11,6 +11,7 @@ import com.example.pipeline.wipe.FlatWiper
 import java.io.File
 import java.io.FileOutputStream
 import kotlinx.coroutines.runBlocking
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -51,7 +52,7 @@ class TypesetRenderProofTest {
         val outDir = File(outDirPath!!).apply { mkdirs() }
         val context = ApplicationProvider.getApplicationContext<Context>()
 
-        val dump = JSONObject()
+        val dumpLines = mutableListOf<String>()
         var totalUnits = 0
         for (page in pages) {
             val clean = File(cleanDir!!).listFiles()!!.first { it.name.startsWith(page) }
@@ -70,11 +71,23 @@ class TypesetRenderProofTest {
                 )
             }
             val decisions = mutableListOf<Map<String, Any>>()
-            Typesetter.onLayoutDecided = { id, type, decidedText, lines, hyphenated ->
+            Typesetter.onLayoutDecided = { id, type, decidedText, lines, hyphenated, fontSizePx, phase, lineCount, occupancy ->
                 decisions += mapOf(
                     "id" to id, "type" to type, "text" to decidedText,
                     "lines" to lines, "hyphenated" to hyphenated
                 )
+                dumpLines += JSONObject().apply {
+                    put("page", page)
+                    put("id", id)
+                    put("type", type)
+                    put("text", decidedText)
+                    put("lines", JSONArray(lines))
+                    put("hyphenated", hyphenated)
+                    put("fontSizePx", fontSizePx.toDouble())
+                    put("phase", phase)
+                    put("lineCount", lineCount)
+                    put("occupancy", occupancy)
+                }.toString()
             }
             val rendered = try {
                 val wiped = runBlocking { FlatWiper.wipeBubbles(original, bubbles) }
@@ -95,12 +108,9 @@ class TypesetRenderProofTest {
                 )
             }
             totalUnits += decisions.size
-            dump.put(page, decisions.toString())
             println("[render] $page units=${decisions.size} hyphenated=${decisions.count { it["hyphenated"] == true }} -> $outFile")
         }
-        File(outDir, "layout_dump.txt").writeText(
-            (0 until dump.length()).joinToString("\n") { "" } + pages.joinToString("\n\n") { p -> "$p\n${dump.getString(p)}" }
-        )
+        File(outDir, "layout_dump.txt").writeText(dumpLines.joinToString("\n") + "\n")
         println("[render] total units=$totalUnits, zero unhyphenated mid-word splits")
     }
 }

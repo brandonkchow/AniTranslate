@@ -19,7 +19,20 @@ import kotlin.math.min
 object Typesetter {
 
     /** Test/render-proof hook: receives the one layout decision per unit. */
-    internal var onLayoutDecided: ((bubbleId: Int, bubbleType: String, decidedText: String, lines: List<String>, hyphenated: Boolean) -> Unit)? = null
+    internal var onLayoutDecided: ((bubbleId: Int, bubbleType: String, decidedText: String, lines: List<String>, hyphenated: Boolean, fontSizePx: Float, phase: String, lineCount: Int, occupancy: Double) -> Unit)? = null
+
+    /**
+     * Occupancy floor (OCC2, Commander 2026-11-15): measured basis from
+     * OCC1's table — accepted pages 4/5 bubbles min 0.1688 / p10 0.2459 /
+     * median 0.6601, page-6 islands 0.1930 / 0.1968. F = 0.20 sits just
+     * above the island max and is a TRIGGER only: a whole-word choice
+     * below it evaluates the hyphenated candidate, which is adopted only
+     * on strict improvement in both font size and occupancy. The adoption
+     * test — not the floor — is the separator (a floor-as-verdict is
+     * impossible: the islands sit inside the accepted range). Reference
+     * thresholds for the hyphenation itself live in WordWrap.kt's header.
+     */
+    internal const val OCCUPANCY_FLOOR_TRIGGER = 0.20
 
     suspend fun typesetBubbles(
         context: Context,
@@ -116,7 +129,11 @@ object Typesetter {
             val optimalLayout = choice.layout
             val optimalPaint = choice.paint
             val layoutWidthUsed = choice.widthPx
-            onLayoutDecided?.invoke(bubble.id, bubble.type, text, choice.lines, choice.hyphenated)
+            onLayoutDecided?.invoke(
+                bubble.id, bubble.type, text, choice.lines, choice.hyphenated,
+                choice.paint.textSize, choice.phase, choice.lines.size,
+                occupancyOf(choice, grownWidth, grownHeight)
+            )
 
             // Dual-Pass Rendering:
             // Pass 1: Crisp white outer stroke halo (guarantees readability on screentones & dark art)
@@ -175,8 +192,21 @@ object Typesetter {
         val text: String,
         val lines: List<String>,
         val widthPx: Int,
-        val hyphenated: Boolean
+        val hyphenated: Boolean,
+        val phase: String
     )
+
+    /**
+     * Occupancy = text block / grown-bubble interior, where the text block
+     * is (widest drawn StaticLayout line x layout height) and the interior
+     * is the grown box (90% of the bubble box for balloons, the extent
+     * minus a hairline inset for floating units). Permanent measurement
+     * instrument for the occupancy floor (OCC1/OCC2).
+     */
+    internal fun occupancyOf(choice: LayoutChoice, grownWidth: Int, grownHeight: Float): Double {
+        val widest = (0 until choice.layout.lineCount).maxOfOrNull { choice.layout.getLineWidth(it) } ?: 0f
+        return (widest.toDouble() * choice.layout.height.toDouble()) / (grownWidth.toDouble() * grownHeight.toDouble())
+    }
 
     private fun makePaint(sizePx: Float, typeface: Typeface, isShout: Boolean) =
         TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -218,7 +248,8 @@ object Typesetter {
         typeface: Typeface,
         maxLines: Int,
         isShout: Boolean,
-        hyphenate: Boolean
+        hyphenate: Boolean,
+        phase: String
     ): LayoutChoice? {
         fun candidate(sizePx: Float): LayoutChoice? {
             val paint = makePaint(sizePx, typeface, isShout)
@@ -232,7 +263,7 @@ object Typesetter {
             if (layout.height > heightPx) return null
             if (layoutLines(layout) != wrap.lines) return null
             if (WordWrap.hasUnhyphenatedMidWordSplit(text, wrap.lines)) return null
-            return LayoutChoice(layout, paint, wrap.text, wrap.lines, widthPx, wrap.hyphenated)
+            return LayoutChoice(layout, paint, wrap.text, wrap.lines, widthPx, wrap.hyphenated, phase)
         }
 
         var low = minSizePx
@@ -253,11 +284,54 @@ object Typesetter {
     }
 
     /**
+     * Occupancy-floor trigger plus adoption test (OCC2): when a whole-word
+     * choice sits below [OCCUPANCY_FLOOR_TRIGGER], evaluate the hyphenated
+     * candidate at the grown box and adopt it only on strict improvement
+     * in BOTH font size and occupancy. Anything else keeps the whole-word
+     * layout unchanged, so Commander-accepted pages stay byte-identical in
+     * their decided lines.
+     */
+    private fun considerFloorAdoption(
+        text: String,
+        wholeWord: LayoutChoice,
+        grownWidth: Int,
+        grownHeight: Float,
+        maxSizePx: Float,
+        minSizePx: Float,
+        typeface: Typeface,
+        maxLines: Int,
+        isShout: Boolean
+    ): LayoutChoice {
+        // Hyphenation evaluation is multi-word only (manga-image-translator
+        // text_render.py draws split hyphens only when len(words) > 1), so
+        // one-word shorts and shouts never reach the adoption test.
+        if (text.split(Regex("\\s+")).filter { it.isNotEmpty() }.size <= 1) return wholeWord
+        val wholeOcc = occupancyOf(wholeWord, grownWidth, grownHeight)
+        if (wholeOcc >= OCCUPANCY_FLOOR_TRIGGER) return wholeWord
+        val hyphenated = searchLayout(
+            text, grownWidth, grownHeight, maxSizePx, minSizePx,
+            typeface, maxLines, isShout, hyphenate = true, phase = "hyphenate"
+        ) ?: return wholeWord
+        if (hyphenated.hyphenated &&
+            hyphenated.paint.textSize > wholeWord.paint.textSize &&
+            occupancyOf(hyphenated, grownWidth, grownHeight) > wholeOcc
+        ) {
+            return hyphenated.copy(phase = "floor-hyphenate")
+        }
+        return wholeWord
+    }
+
+    /**
      * Commander fallback order: (1) shrink the font and re-wrap whole words,
      * (2) grow the box inside the bubble interior / free-text extent,
      * (3) hyphenate at a syllable with a visible hyphen. Last resort keeps
      * the BACKLOG:13 shrink-to-fit floor (4px, more lines) under the same
      * hyphenation rules, so a split without a hyphen is never emitted.
+     *
+     * OCC2 amends (1)-(2): a whole-word choice below the occupancy floor
+     * trigger is offered to the hyphenated candidate at the grown box, and
+     * adopted only when it strictly beats whole-word on both font size and
+     * occupancy ([considerFloorAdoption]).
      */
     internal fun calculateBestLayout(
         text: String,
@@ -271,13 +345,13 @@ object Typesetter {
         maxLines: Int,
         isShout: Boolean = false
     ): LayoutChoice {
-        searchLayout(text, availableWidth, availableHeight, maxSizePx, minSizePx, typeface, maxLines, isShout, hyphenate = false)
+        searchLayout(text, availableWidth, availableHeight, maxSizePx, minSizePx, typeface, maxLines, isShout, hyphenate = false, phase = "shrink")
+            ?.let { return considerFloorAdoption(text, it, grownWidth, grownHeight, maxSizePx, minSizePx, typeface, maxLines, isShout) }
+        searchLayout(text, grownWidth, grownHeight, maxSizePx, minSizePx, typeface, maxLines, isShout, hyphenate = false, phase = "grow")
+            ?.let { return considerFloorAdoption(text, it, grownWidth, grownHeight, maxSizePx, minSizePx, typeface, maxLines, isShout) }
+        searchLayout(text, grownWidth, grownHeight, maxSizePx, minSizePx, typeface, maxLines, isShout, hyphenate = true, phase = "hyphenate")
             ?.let { return it }
-        searchLayout(text, grownWidth, grownHeight, maxSizePx, minSizePx, typeface, maxLines, isShout, hyphenate = false)
-            ?.let { return it }
-        searchLayout(text, grownWidth, grownHeight, maxSizePx, minSizePx, typeface, maxLines, isShout, hyphenate = true)
-            ?.let { return it }
-        searchLayout(text, grownWidth, grownHeight, minSizePx, 4f, typeface, maxLines * 3, isShout, hyphenate = true)
+        searchLayout(text, grownWidth, grownHeight, minSizePx, 4f, typeface, maxLines * 3, isShout, hyphenate = true, phase = "floor-resort")
             ?.let { return it }
 
         // Nothing fitted: emit the hyphenated wrap at the floor size anyway
@@ -292,7 +366,7 @@ object Typesetter {
         val decidedText = wrap?.text ?: text
         return LayoutChoice(
             buildLayout(decidedText, paint, grownWidth, lines.size),
-            paint, decidedText, lines, grownWidth, wrap?.hyphenated ?: false
+            paint, decidedText, lines, grownWidth, wrap?.hyphenated ?: false, "floor-resort"
         )
     }
 }
