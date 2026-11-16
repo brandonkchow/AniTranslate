@@ -19,9 +19,10 @@ class SpaceAwareRetryTest {
         phase: String = "shrink",
         hyphenated: Boolean = false,
         fontSizePx: Float = 20f,
+        preferredSizePx: Float = 15f,
         minReadablePx: Float = 10f,
         clipped: Boolean = false
-    ) = Typesetter.LayoutOutcome(1, phase, hyphenated, fontSizePx, minReadablePx, clipped)
+    ) = Typesetter.LayoutOutcome(1, phase, hyphenated, fontSizePx, preferredSizePx, minReadablePx, clipped)
 
     @Test
     fun `healthy layout is not distressed`() {
@@ -30,12 +31,18 @@ class SpaceAwareRetryTest {
     }
 
     @Test
+    fun `below preferred size is distressed and at preferred size is not`() {
+        assertTrue(SpaceAwareRetry.isDistressed(outcome(fontSizePx = 14.9f, preferredSizePx = 15f)))
+        assertFalse(SpaceAwareRetry.isDistressed(outcome(fontSizePx = 15f, preferredSizePx = 15f)))
+    }
+
+    @Test
     fun `hyphenation floor clipping and minimum font are distress`() {
         assertTrue(SpaceAwareRetry.isDistressed(outcome(hyphenated = true)))
         assertTrue(SpaceAwareRetry.isDistressed(outcome(phase = "floor-resort")))
         assertTrue(SpaceAwareRetry.isDistressed(outcome(clipped = true)))
-        assertTrue(SpaceAwareRetry.isDistressed(outcome(fontSizePx = 10.4f)))
-        assertFalse(SpaceAwareRetry.isDistressed(outcome(fontSizePx = 10.6f)))
+        assertTrue(SpaceAwareRetry.isDistressed(outcome(fontSizePx = 10.4f, preferredSizePx = 10f)))
+        assertFalse(SpaceAwareRetry.isDistressed(outcome(fontSizePx = 10.6f, preferredSizePx = 10f)))
     }
 
     @Test

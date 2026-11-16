@@ -17,16 +17,17 @@ import com.example.pipeline.typeset.Typesetter
  * core meaning last — and a candidate that is not strictly shorter than
  * the standing translation is rejected, so a retry can never make fit
  * worse. At most [MAX_ROUNDS] rounds; after that the typesetter's
- * existing shrink/grow/hyphenate order is the final safety net.
+ * existing shrink/hyphenate/floor-resort order is the final safety net.
  */
 internal object SpaceAwareRetry {
 
     const val MAX_ROUNDS = 2
 
-    /** A unit is distressed when its measured layout hit the last-resort zone. */
+    /** Distress = typeset below the preferred (professional standard) size, or a last-resort outcome. */
     fun isDistressed(outcome: Typesetter.LayoutOutcome?): Boolean {
         if (outcome == null) return false
-        return outcome.hyphenated ||
+        return outcome.fontSizePx < outcome.preferredSizePx ||
+            outcome.hyphenated ||
             outcome.clipped ||
             outcome.phase == "floor-resort" ||
             outcome.fontSizePx <= outcome.minReadablePx * 1.05f

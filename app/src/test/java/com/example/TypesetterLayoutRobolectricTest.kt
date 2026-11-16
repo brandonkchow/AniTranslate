@@ -55,11 +55,12 @@ class TypesetterLayoutRobolectricTest {
         FontHelper.getComicTypeface(ApplicationProvider.getApplicationContext())
 
     @Test
-    fun `island hyphenates at a syllable with a larger font above the floor`() {
+    fun `island holds whole-word shrink instead of floor-hyphenating`() {
         // page-6 u7 "Deliciousness alert issued!!" in its real box
         // proportions (800x1184 page, box [0.5561,0.2562,0.7341,0.4898]).
-        // Whole-word shrink sits at 18.99px / 0.1968 occupancy; the floor
-        // trigger (F=0.20) must adopt a hyphenated layout above both.
+        // Under professional lettering practice, whole-word shrink is kept
+        // (phase "shrink", hyphenated == false) rather than adopting a
+        // hyphenated layout to chase occupancy.
         val text = "Deliciousness alert issued!!"
         val choice = Typesetter.calculateBestLayout(
             text = text,
@@ -73,28 +74,37 @@ class TypesetterLayoutRobolectricTest {
             maxLines = 8,
             isShout = true
         )
-        assertTrue("island must hyphenate instead of shrinking whole-word: ${choice.lines}", choice.hyphenated)
-        assertEquals("floor-hyphenate", choice.phase)
+        assertEquals("shrink", choice.phase)
+        assertFalse("island must stay whole-word: ${choice.lines}", choice.hyphenated)
         assertFalse(WordWrap.hasUnhyphenatedMidWordSplit(text, choice.lines))
-        val hyphenLines = choice.lines.dropLast(1).filter { it.endsWith("-") }
-        assertTrue("split lines must show a visible hyphen: ${choice.lines}", hyphenLines.isNotEmpty())
-        val words = text.split(' ')
-        for (line in hyphenLines) {
-            val fragment = line.substringAfterLast(' ').removeSuffix("-")
-            val word = words.single { it.startsWith(fragment) && it.length > fragment.length }
-            assertTrue(
-                "split of '$word' at ${fragment.length} is not a syllable boundary ${WordWrap.syllableSplitPoints(word)}",
-                WordWrap.syllableSplitPoints(word).contains(fragment.length)
-            )
-        }
-        assertTrue(
-            "hyphenated font ${choice.paint.textSize} must exceed whole-word 18.99px",
-            choice.paint.textSize > 18.990673065185547f
+        assertEquals(listOf("Deliciousness", "alert issued!!"), choice.lines)
+    }
+
+    @Test
+    fun `low-occupancy whole-word choice is returned unchanged even when hyphenation would be larger`() {
+        // Uses measured p6u7 box geometry where whole-word shrink sits below
+        // 0.20 occupancy (~0.1968 at ~18.99px) while a hyphenated layout in
+        // the grown box would be larger. Whole-word shrink must be returned unchanged.
+        val text = "Deliciousness alert issued!!"
+        val choice = Typesetter.calculateBestLayout(
+            text = text,
+            availableWidth = 108,
+            availableHeight = 221.26592f,
+            grownWidth = 128,
+            grownHeight = 248.92416f,
+            maxSizePx = 23.70368f,
+            minSizePx = 10.656f,
+            typeface = comicTypeface(),
+            maxLines = 8,
+            isShout = true
         )
         assertTrue(
-            "hyphenated occupancy must clear the 0.20 floor",
-            Typesetter.occupancyOf(choice, 128, 248.92416f) > 0.20
+            "test premise: whole-word choice sits below 0.20 occupancy",
+            Typesetter.occupancyOf(choice, 128, 248.92416f) < 0.20
         )
+        assertEquals("shrink", choice.phase)
+        assertFalse(choice.hyphenated)
+        assertEquals(listOf("Deliciousness", "alert issued!!"), choice.lines)
     }
 
     @Test
