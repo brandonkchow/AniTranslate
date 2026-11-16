@@ -42,16 +42,25 @@ internal object SpaceAwareRetry {
     fun accepts(current: String, candidate: String?): Boolean =
         !candidate.isNullOrBlank() && candidate.length < current.length
 
+    private fun lastResort(outcome: Typesetter.LayoutOutcome?): Boolean =
+        outcome != null && (outcome.hyphenated || outcome.clipped || outcome.phase == "floor-resort")
+
     /**
      * A shorter string can still typeset worse (wider glyphs, fewer word
      * breaks, shout uppercasing), so acceptance is provisional until the
-     * re-typeset outcome is compared: worse means still distressed
-     * without a larger font, or newly distressed. The pipeline reverts
-     * any unit this flags, which is what makes "a retry can never make
-     * fit worse" true on measured axes, not just on character count.
+     * re-typeset outcome is compared. Outcomes are ranked by distress class
+     * before font size: a last-resort layout (hyphenated, clipped, or
+     * floor-resort) is a lettering failure that a marginally smaller
+     * whole-word layout is not, so leaving the last-resort class is never
+     * worse and entering it is always worse. Within the same class, worse
+     * means still distressed without a larger font, or newly distressed.
+     * The pipeline reverts any unit this flags, which is what makes "a
+     * retry can never make fit worse" true on measured axes, not just on
+     * character count.
      */
     fun madeWorse(before: Typesetter.LayoutOutcome?, after: Typesetter.LayoutOutcome?): Boolean {
         if (after == null) return false
+        if (lastResort(after) != lastResort(before)) return lastResort(after)
         if (!isDistressed(after)) return false
         if (!isDistressed(before)) return true
         return after.fontSizePx <= (before?.fontSizePx ?: Float.MAX_VALUE)

@@ -75,6 +75,20 @@ class SpaceAwareRetryTest {
     }
 
     @Test
+    fun `leaving last-resort class is not madeWorse even at smaller font`() {
+        val before = outcome(hyphenated = true, fontSizePx = 16f)
+        val after = outcome(phase = "shrink", hyphenated = false, clipped = false, fontSizePx = 14f, preferredSizePx = 20f)
+        assertFalse(SpaceAwareRetry.madeWorse(before, after))
+    }
+
+    @Test
+    fun `entering last-resort class is madeWorse even at larger font`() {
+        val before = outcome(phase = "shrink", hyphenated = false, fontSizePx = 14f)
+        val after = outcome(hyphenated = true, fontSizePx = 18f)
+        assertTrue(SpaceAwareRetry.madeWorse(before, after))
+    }
+
+    @Test
     fun `retry instruction carries target and shed order`() {
         val b = Bubble(id = 7, text = "テスト", translated = "This unbelievably delicious meat", box = listOf(0.1f, 0.1f, 0.3f, 0.3f))
         val s = SpaceAwareRetry.retryInstruction(b, 40, 1)
