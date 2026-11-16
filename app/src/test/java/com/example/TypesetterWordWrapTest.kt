@@ -55,25 +55,26 @@ class TypesetterWordWrapTest {
     @Test
     fun `over-wide word hyphenates at a syllable boundary with a visible hyphen`() {
         val word = "unbelievably"
-        val result = WordWrap.wrap(word, 36f, 10f, hyphenate = true, measure = measure)
+        val result = WordWrap.wrap("say $word now", 36f, 10f, hyphenate = true, measure = measure)
         assertNotNull(result)
         assertTrue(result!!.hyphenated)
-        assertTrue("a hyphenated line must show the hyphen", result.lines.dropLast(1).all { it.endsWith("-") })
-        assertEquals(word, reconstruct(result.lines).replace("-", ""))
-        // Split points must be syllable boundaries chosen by the syllabifier.
+        val hyphenatedLines = result.lines.filter { it.endsWith("-") }
+        assertTrue("a hyphenated split must show the hyphen", hyphenatedLines.isNotEmpty())
+        assertEquals("say $word now", reconstruct(result.lines).replace("-", ""))
+        // Split points must be syllable boundaries chosen by the syllabifier, with 3/3 fragment floor.
+        val wordChunks = WordWrap.hyphenateWord(word, 36f, 10f, measure)
+        assertNotNull(wordChunks)
         var consumed = 0
-        for (line in result.lines.dropLast(1)) {
-            val fragment = line.removeSuffix("-")
+        for (fragment in wordChunks!!.dropLast(1)) {
             consumed += fragment.length
             assertTrue(
                 "split at $consumed in $word is not a syllable boundary ${WordWrap.syllableSplitPoints(word)}",
-                WordWrap.syllableSplitPoints(word).contains(consumed) || fragment.length >= 2
+                WordWrap.syllableSplitPoints(word).contains(consumed)
             )
-            // Small-split floor (manga-image-translator Step 3): no 1-char fragments.
-            assertTrue("fragment '$fragment' below small-split floor", fragment.length >= 2)
+            assertTrue("fragment '$fragment' below 3-char floor", fragment.length >= 3)
         }
-        val last = result.lines.last()
-        assertTrue("tail fragment '$last' below small-split floor", last.length >= 2)
+        val last = wordChunks.last()
+        assertTrue("tail fragment '$last' below 3-char floor", last.length >= 3)
     }
 
     @Test
@@ -139,5 +140,67 @@ class TypesetterWordWrapTest {
         // Words of 3 chars or fewer are below the reference word-length floor.
         val result = WordWrap.wrap("sad", 12f, 10f, hyphenate = true, measure = measure)
         assertTrue(result == null || !result.hyphenated)
+    }
+
+    @Test
+    fun `fragment floor 3 rejects What's class and short-tail syllable splits`() {
+        // "What's" has no syllable split and must not fall back to "What-'s".
+        assertNull(WordWrap.hyphenateWord("What's", 30f, 10f, measure))
+        assertNull(WordWrap.wrap("say What's up", 30f, 10f, hyphenate = true, measure = measure))
+
+        // Words whose only syllable split leaves < 3 chars on either side must return null.
+        // "pretty" -> only split at 4 ("pret-ty", 2-char tail); "sorry" -> 3 ("sor-ry", 2-char tail).
+        assertNull(WordWrap.hyphenateWord("pretty", 30f, 10f, measure))
+        assertNull(WordWrap.hyphenateWord("sorry", 24f, 10f, measure))
+        assertNull(WordWrap.hyphenateWord("into", 18f, 10f, measure))
+    }
+
+    @Test
+    fun `supposed still splits at 5-before 3-after syllable boundary`() {
+        val chunks = WordWrap.hyphenateWord("supposed", 36f, 10f, measure)
+        assertEquals(listOf("suppo", "sed"), chunks)
+    }
+
+    @Test
+    fun `single-vowel-group word returns null instead of non-syllable prefix cut`() {
+        assertNull(WordWrap.hyphenateWord("strengths", 36f, 10f, measure))
+        assertNull(WordWrap.wrap("my strengths are", 36f, 10f, hyphenate = true, measure = measure))
+    }
+
+    @Test
+    fun `titlecase word mid-paragraph is never hyphenated while first-word and all-caps are exempt`() {
+        // Mid-paragraph Titlecase name overflows 36px (6 chars) -> must return null.
+        assertNull(WordWrap.wrap("the Godzilla ran", 36f, 10f, hyphenate = true, measure = measure))
+
+        // Paragraph-first Titlecase word is exempt -> may split at legal syllable point (God-zilla).
+        val firstWord = WordWrap.wrap("Godzilla ran away", 36f, 10f, hyphenate = true, measure = measure)
+        assertNotNull(firstWord)
+        assertTrue(firstWord!!.hyphenated)
+        assertEquals("God-", firstWord.lines.first())
+
+        // Mid-paragraph ALL-CAPS shout is exempt -> may split at legal syllable point (GOD-ZILLA).
+        val allCaps = WordWrap.wrap("the GODZILLA ran", 36f, 10f, hyphenate = true, measure = measure)
+        assertNotNull(allCaps)
+        assertTrue(allCaps!!.hyphenated)
+        assertTrue(allCaps.lines.any { it == "GOD-" })
+    }
+
+    @Test
+    fun `last word of a paragraph is never hyphenated while mid-paragraph may split`() {
+        // Final word of paragraph -> must return null even with legal syllable points.
+        assertNull(WordWrap.wrap("I am unbelievably", 36f, 10f, hyphenate = true, measure = measure))
+        assertNull(WordWrap.wrap("I am unbelievably\nreally sad", 36f, 10f, hyphenate = true, measure = measure))
+
+        // Same word mid-paragraph -> may split legally.
+        val mid = WordWrap.wrap("I am unbelievably sad", 36f, 10f, hyphenate = true, measure = measure)
+        assertNotNull(mid)
+        assertTrue(mid!!.hyphenated)
+    }
+
+    @Test
+    fun `multi-split word keeps every fragment at least 3 characters`() {
+        val chunks = WordWrap.hyphenateWord("deliciousness", 36f, 10f, measure)
+        assertEquals(listOf("deli", "cious", "ness"), chunks)
+        assertTrue(chunks!!.all { it.length >= 3 })
     }
 }

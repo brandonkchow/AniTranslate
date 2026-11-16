@@ -12,22 +12,24 @@ package com.example.pipeline.typeset
  * and Android silently breaks a word that is wider than the line mid-word,
  * with no hyphen. Readers got "unbelie/vably", "sor/ry", "cry/ing".
  *
- * Thresholds, adapted from the reference repos on disk (see commit message):
+ * Thresholds, governed by `rapi-work/bulcan-anitranslate/TYPESETTING-COMPARISON.md` row 4:
  *  - Whole words first, hyphenation only on overflow — manga-image-translator
  *    rendering/text_render.py calc_horizontal Step 1 (~713: "Arrange words
  *    without hyphenating unless necessary") and BallonsTranslator
  *    ui/text_engine/horizontal_layout.py (~1029,
- *    WrapAtWordBoundaryOrAnywhere: word boundary first, anywhere only as
- *    fallback).
- *  - Hyphenate at syllable boundaries only (text_render.py ~753).
- *  - Small-split floor: no fragment under 2 characters, preferring fragments
- *    at least one font-size wide (text_render.py Step 3, ~838: fragments
- *    narrower than font_size are moved to the neighbouring line).
+ *    WrapAtWordBoundaryOrAnywhere: word boundary first).
+ *  - Hyphenate at syllable boundaries only (text_render.py ~753); no
+ *    non-syllable prefix fallback.
+ *  - 3/3 fragment floor: every fragment before and after a hyphen must be
+ *    at least 3 characters long, preferring first fragments at least one
+ *    font-size wide (adapted from text_render.py Step 3, ~838).
  *  - Word-length floor: words of 3 characters or fewer are never hyphenated
  *    (text_render.py ~855 draws hyphen characters only for words > 3 chars).
- *  - One deliberate deviation: text_render.py suppresses the hyphen
- *    character when there is only one word or the box is under 1.5 font
- *    sizes wide. Here a split without a visible hyphen is the defect being
+ *  - Name guard: Titlecase words (first character uppercase, at least one
+ *    later character lowercase) after the first word of a paragraph are
+ *    never hyphenated; ALL-CAPS shouts and paragraph-first words are exempt.
+ *  - Last-word guard: the last word of a paragraph is never hyphenated.
+ *  - Visible hyphen: a split without a visible hyphen is the defect being
  *    fixed, so the hyphen is always drawn when a word is split.
  */
 object WordWrap {
@@ -70,7 +72,7 @@ object WordWrap {
                 }
             }
 
-            for (word in words) {
+            for ((wordIndex, word) in words.withIndex()) {
                 val wordWidth = measure(word, fontSizePx)
                 if (wordWidth <= maxWidthPx) {
                     val candidate = if (current.isEmpty()) word else "$current $word"
@@ -86,6 +88,8 @@ object WordWrap {
 
                 // Single word wider than the line.
                 if (!hyphenate) return null
+                if (wordIndex == words.lastIndex) return null
+                if (wordIndex > 0 && isTitlecase(word)) return null
                 val chunks = hyphenateWord(word, maxWidthPx, fontSizePx, measure) ?: return null
                 hyphenated = true
                 for ((index, chunk) in chunks.withIndex()) {
@@ -108,10 +112,19 @@ object WordWrap {
         return Result(lines, hyphenated)
     }
 
+    private fun isTitlecase(word: String): Boolean {
+        if (word.isEmpty() || !word[0].isUpperCase()) return false
+        for (i in 1 until word.length) {
+            if (word[i].isLowerCase()) return true
+        }
+        return false
+    }
+
     /**
      * Splits [word] into chunks that each fit [maxWidthPx] (with room for
-     * the hyphen on all but the last), at syllable boundaries where
-     * possible. Null when no split above the small-split floor exists.
+     * the hyphen on all but the last), at syllable boundaries only, keeping
+     * every fragment at least 3 characters long. Null when no eligible split
+     * exists.
      */
     fun hyphenateWord(
         word: String,
@@ -125,28 +138,17 @@ object WordWrap {
         while (measure(rest, fontSizePx) > maxWidthPx) {
             val budget = maxWidthPx // hyphen added by caller; reserve its width below
             val points = syllableSplitPoints(rest)
-                .filter { it >= 2 && rest.length - it >= 2 }
+                .filter { it >= 3 && rest.length - it >= 3 }
                 .sortedDescending()
-            var split = points.firstOrNull { point ->
+            val split = points.firstOrNull { point ->
                 measure(rest.substring(0, point) + "-", fontSizePx) <= budget &&
                     // Small-split floor: prefer fragments at least ~1em wide.
                     (measure(rest.substring(0, point), fontSizePx) >= fontSizePx ||
                         measure(rest.substring(point), fontSizePx) <= maxWidthPx)
-            }
-            if (split == null) {
-                // No syllable boundary fits: largest fitting prefix, still
-                // above the floor, so the split carries a hyphen and never
-                // strands a single character.
-                var best = -1
-                for (point in 2 until rest.length - 1) {
-                    if (measure(rest.substring(0, point) + "-", fontSizePx) <= budget) best = point
-                }
-                if (best < 0) return null
-                split = best
-            }
+            } ?: return null
             chunks += rest.substring(0, split)
             rest = rest.substring(split)
-            if (rest.length < 2) return null
+            if (rest.length < 3) return null
         }
         if (rest.isEmpty()) return null
         chunks += rest
