@@ -161,10 +161,14 @@ object BubbleInkMask {
             x in 0 until box.width && y in 0 until box.height
         }
         val candidateBounds = if (bubbleMask != null) bubbleMask else rawBoxMask
-        val boxMask = candidateBounds
+        var boxMask = candidateBounds
 
         // When a measured bubble interior is provided, it is the outer wall of protection:
         // any ink inside bubbleMask is text, and dilate bounds never extend outside it.
+        // A supplied mask with almost no ink in it is not this bubble's interior — a wrong
+        // small component adopted by centre or vote (an edge-sealed component can be one);
+        // returning its empty plan would leave the lettering standing, so fall through to
+        // the box classification below instead.
         if (bubbleMask != null) {
             val inside = inkWithin(luminance, bubbleMask, bgLum, isInverted)
             if (inside.count >= MIN_TEXT_PIXELS) {
@@ -187,7 +191,7 @@ object BubbleInkMask {
                     structure = structureMask
                 )
             } else {
-                return Plan(wallInset, bubbleMask, BooleanArray(count), false)
+                boxMask = rawBoxMask
             }
         }
 

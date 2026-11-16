@@ -85,6 +85,32 @@ class EnclosureMapTest {
     }
 
     @Test
+    fun `bubble clipped by page top measures an enclosure only when the edge seals it`() {
+        val w = 60
+        val h = 60
+        val lum = FloatArray(w * h) { 1.0f }
+        // Bubble open at the top page edge: walls on left/right/bottom only.
+        for (y in 0..25) {
+            lum[y * w + 20] = 0f
+            lum[y * w + 40] = 0f
+        }
+        for (x in 20..40) lum[25 * w + x] = 0f
+        // Text ink inside it.
+        for (y in 10..14) for (x in 28..32) lum[y * w + x] = 0f
+
+        val box = listOf(22f / w, 2f / h, 38f / w, 23f / h)
+        // Unsealed: the interior drains through the missing top wall into the
+        // page margins, so no enclosure is measured (BACKLOG:711 mechanism).
+        assertNull(EnclosureMap.build(lum, w, h).findEnclosureForBox(box))
+        // Sealed: the page edge closes the bubble and its own interior wins
+        // over the page-margin component.
+        val sealed = EnclosureMap.build(lum, w, h, sealPageEdges = true)
+        val enc = sealed.findEnclosureForBox(box)
+        assertNotNull(enc)
+        assertTrue(enc!!.area < w * h / 2)
+    }
+
+    @Test
     fun `two-lobe bubble joined by neck is detected as single enclosure covering both lobes`() {
         val w = 100
         val h = 140

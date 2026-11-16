@@ -179,7 +179,7 @@ class EnclosureMap private constructor(
          * @param width image width in pixels.
          * @param height image height in pixels.
          */
-        fun build(luminance: FloatArray, width: Int, height: Int): EnclosureMap {
+        fun build(luminance: FloatArray, width: Int, height: Int, sealPageEdges: Boolean = false): EnclosureMap {
             val count = width * height
             require(count > 0) { "page must not be empty" }
             require(luminance.size >= count) { "need $count luminance values, got ${luminance.size}" }
@@ -191,6 +191,13 @@ class EnclosureMap private constructor(
             var tail = 0
 
             // 1. Mark paper connected to the page borders as open background / margins.
+            //    With sealPageEdges, the page edge itself acts as a closing wall: a balloon
+            //    clipped by the page top has no wall there in the image, so the border flood
+            //    would otherwise drain its interior into the margins and it would measure no
+            //    enclosure at all (page-6 top bubbles, BACKLOG:711). Sealed, every paper
+            //    component is a candidate enclosure; the size and ink guards in
+            //    findEnclosureForBox keep the page-margin component from being adopted.
+            if (!sealPageEdges) {
             for (x in 0 until width) {
                 if (paper[x] && !borderPaper[x]) {
                     borderPaper[x] = true
@@ -213,6 +220,7 @@ class EnclosureMap private constructor(
                     borderPaper[rightIdx] = true
                     queue[tail++] = rightIdx
                 }
+            }
             }
 
             val dxs = intArrayOf(1, -1, 0, 0)
