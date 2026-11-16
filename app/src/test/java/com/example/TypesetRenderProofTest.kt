@@ -91,6 +91,12 @@ class TypesetRenderProofTest {
             }
             val rendered = try {
                 val wiped = runBlocking { FlatWiper.wipeBubbles(original, bubbles) }
+                // Wiped-but-not-typeset output: the residual-ink measurement reads
+                // this, so leftover source glyphs are counted without the English
+                // glyphs drawn over them polluting the count.
+                FileOutputStream(File(outDir, "${page}_wiped.jpg")).use {
+                    wiped.compress(Bitmap.CompressFormat.JPEG, 92, it)
+                }
                 runBlocking { Typesetter.typesetBubbles(context, wiped, bubbles) }
             } finally {
                 Typesetter.onLayoutDecided = null

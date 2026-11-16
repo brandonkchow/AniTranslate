@@ -343,4 +343,34 @@ class BubbleInkMaskTest {
             assertTrue(resultWithDefaultNull.structure.contentEquals(resultWithExplicitNull.structure))
         }
     }
+
+    @Test
+    fun `a vertical glyph column bridged only by grey is wiped, and art it bridges to is not`() {
+        // Page-6 shape in miniature (units 3, 13, 14): a tall narrow box, dark
+        // glyph blocks stacked vertically, joined to each other and to a dark
+        // artwork block at the box edge only by mid-grey anti-alias pixels.
+        // The grey counts as ink at the wipe tolerance, so the loose mask is
+        // one tall component the extent rule protects as structure; the dark
+        // cores are separate glyphs, and the artwork core touches the edge.
+        val result = plan(
+            region(
+                intArrayOf(37, 8, 43, 14, ink), // glyph block
+                intArrayOf(39, 14, 41, 18, grey), // grey bridge
+                intArrayOf(37, 18, 43, 24, ink), // glyph block
+                intArrayOf(39, 24, 41, 28, grey), // grey bridge
+                intArrayOf(37, 28, 43, 34, ink), // glyph block
+                intArrayOf(35, 34, 41, 38, grey), // grey bridge down to the art
+                intArrayOf(30, 38, 44, 48, ink), // artwork, reaching the box bottom edge
+                intArrayOf(45, 8, 49, 12, ink) // a small free glyph: keeps the classifier in charge, as the specks do on the page
+            ),
+            frame(30, 5, 20, 43)
+        )
+
+        assertTrue("top glyph of the column is wiped", result.wipe[11 * size + 40])
+        assertTrue("middle glyph of the column is wiped", result.wipe[21 * size + 40])
+        assertTrue("bottom glyph of the column is wiped", result.wipe[31 * size + 40])
+        assertTrue("the grey bridge between glyphs is wiped with them", result.glyph[16 * size + 40])
+        assertFalse("the artwork block is not wiped", result.wipe[43 * size + 37])
+        assertTrue("the artwork block is structure", result.structure[43 * size + 37])
+    }
 }

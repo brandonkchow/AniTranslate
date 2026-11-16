@@ -23,6 +23,16 @@ object BubbleInkMask {
      */
     const val INK_TOLERANCE = 0.02f
 
+    /**
+     * Deviation from the interior colour at or above which a pixel is *core* ink.
+     *
+     * The loose test above exists to catch the JPEG ringing around a glyph, but that fringe is
+     * also what fuses a tight vertical glyph column into one tall component. Component labelling
+     * therefore runs on pixels that are unambiguously ink (see [GlyphErase]), while the loose
+     * mask remains the wipe-coverage mask the verdict is expanded back over.
+     */
+    private const val CORE_TOLERANCE = 0.45f
+
     /** Below this, there is no text worth masking and the caller should use a shape wipe. */
     private const val MIN_TEXT_PIXELS = 10
 
@@ -80,7 +90,8 @@ object BubbleInkMask {
         luminance: FloatArray,
         bounds: BooleanArray,
         bgLum: Float,
-        isInverted: Boolean
+        isInverted: Boolean,
+        tolerance: Float = INK_TOLERANCE
     ): Ink {
         val mask = BooleanArray(luminance.size)
         var count = 0
@@ -88,9 +99,9 @@ object BubbleInkMask {
             if (!bounds[i]) continue
             val lum = luminance[i]
             val isInk = if (isInverted) {
-                lum > bgLum + INK_TOLERANCE
+                lum > bgLum + tolerance
             } else {
-                lum < bgLum - INK_TOLERANCE
+                lum < bgLum - tolerance
             }
             if (isInk) {
                 mask[i] = true
@@ -172,7 +183,8 @@ object BubbleInkMask {
         if (bubbleMask != null) {
             val inside = inkWithin(luminance, bubbleMask, bgLum, isInverted)
             if (inside.count >= MIN_TEXT_PIXELS) {
-                val glyph = GlyphErase.wipe(inside.mask, bubbleMask, width, height, box, radius)
+                val core = inkWithin(luminance, bubbleMask, bgLum, isInverted, CORE_TOLERANCE)
+                val glyph = GlyphErase.wipe(inside.mask, bubbleMask, width, height, box, radius, core.mask)
                 val glyphMask = BooleanArray(count) { i ->
                     bubbleMask[i] && (glyph.glyph[i] || inside.mask[i])
                 }
@@ -200,7 +212,8 @@ object BubbleInkMask {
         // the box needs no shape inset from a wall in order to be safe.
         val boxInk = inkWithin(luminance, boxMask, bgLum, isInverted)
         if (boxInk.count >= MIN_TEXT_PIXELS) {
-            val glyph = GlyphErase.wipe(boxInk.mask, boxMask, width, height, box, radius)
+            val boxCore = inkWithin(luminance, boxMask, bgLum, isInverted, CORE_TOLERANCE)
+            val glyph = GlyphErase.wipe(boxInk.mask, boxMask, width, height, box, radius, boxCore.mask)
             if (glyph.glyphPixels >= MIN_TEXT_PIXELS) {
 
                 // Topology splits what connectivity cannot. The wall is contiguous with the page,
