@@ -56,7 +56,7 @@ class TypesetterLayoutRobolectricTest {
 
     @Test
     fun `island hyphenates at a syllable with a larger font above the floor`() {
-        // OCC2: page-6 u7 "Deliciousness alert issued!!" in its real box
+        // page-6 u7 "Deliciousness alert issued!!" in its real box
         // proportions (800x1184 page, box [0.5561,0.2562,0.7341,0.4898]).
         // Whole-word shrink sits at 18.99px / 0.1968 occupancy; the floor
         // trigger (F=0.20) must adopt a hyphenated layout above both.
@@ -99,7 +99,7 @@ class TypesetterLayoutRobolectricTest {
 
     @Test
     fun `accepted short p4u2 keeps its decided line`() {
-        // OCC2 invariant: "...M...Mom?" (1280x1804 page, box
+        // Invariant: "...M...Mom?" (1280x1804 page, box
         // [0.8139,0.1758,0.8932,0.257]) sits below the floor at 0.1688 but
         // is a single word, so the trigger must not change its lines.
         val text = "...M...Mom?"
@@ -126,7 +126,7 @@ class TypesetterLayoutRobolectricTest {
 
     @Test
     fun `accepted short p5u3 keeps its decided line`() {
-        // OCC2 invariant: "...B-but..." (1280x1804 page, box
+        // Invariant: "...B-but..." (1280x1804 page, box
         // [0.1674,0.0688,0.2357,0.1469]) sits below the floor at 0.1849 but
         // is a single word, so the trigger must not change its lines.
         val text = "...B-but..."
@@ -153,7 +153,7 @@ class TypesetterLayoutRobolectricTest {
 
     @Test
     fun `one-word shout never hyphenates`() {
-        // OCC2 invariant: page-6 u10 "WHAT?!" (800x1184 page, box
+        // Invariant: page-6 u10 "WHAT?!" (800x1184 page, box
         // [0.2058,0.5773,0.2902,0.7148]) sits below the floor at 0.1099 but
         // is one word, so it keeps its single line unhyphenated.
         val choice = Typesetter.calculateBestLayout(

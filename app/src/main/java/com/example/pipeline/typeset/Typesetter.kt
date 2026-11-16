@@ -22,10 +22,10 @@ object Typesetter {
     internal var onLayoutDecided: ((bubbleId: Int, bubbleType: String, decidedText: String, lines: List<String>, hyphenated: Boolean, fontSizePx: Float, phase: String, lineCount: Int, occupancy: Double) -> Unit)? = null
 
     /**
-     * Occupancy floor (OCC2, Commander 2026-11-15): measured basis from
-     * OCC1's table — accepted pages 4/5 bubbles min 0.1688 / p10 0.2459 /
-     * median 0.6601, page-6 islands 0.1930 / 0.1968. F = 0.20 sits just
-     * above the island max and is a TRIGGER only: a whole-word choice
+     * Occupancy floor (Commander 2026-11-15): measured basis — accepted
+     * pages 4/5 bubbles min 0.1688 / p10 0.2459 / median 0.6601, page-6
+     * islands 0.1930 / 0.1968. F = 0.20 sits just above the island max
+     * and is a TRIGGER only: a whole-word choice
      * below it evaluates the hyphenated candidate, which is adopted only
      * on strict improvement in both font size and occupancy. The adoption
      * test — not the floor — is the separator (a floor-as-verdict is
@@ -201,7 +201,7 @@ object Typesetter {
      * is (widest drawn StaticLayout line x layout height) and the interior
      * is the grown box (90% of the bubble box for balloons, the extent
      * minus a hairline inset for floating units). Permanent measurement
-     * instrument for the occupancy floor (OCC1/OCC2).
+     * instrument for the occupancy floor.
      */
     internal fun occupancyOf(choice: LayoutChoice, grownWidth: Int, grownHeight: Float): Double {
         val widest = (0 until choice.layout.lineCount).maxOfOrNull { choice.layout.getLineWidth(it) } ?: 0f
@@ -284,7 +284,7 @@ object Typesetter {
     }
 
     /**
-     * Occupancy-floor trigger plus adoption test (OCC2): when a whole-word
+     * Occupancy-floor trigger plus adoption test: when a whole-word
      * choice sits below [OCCUPANCY_FLOOR_TRIGGER], evaluate the hyphenated
      * candidate at the grown box and adopt it only on strict improvement
      * in BOTH font size and occupancy. Anything else keeps the whole-word
@@ -328,7 +328,7 @@ object Typesetter {
      * the BACKLOG:13 shrink-to-fit floor (4px, more lines) under the same
      * hyphenation rules, so a split without a hyphen is never emitted.
      *
-     * OCC2 amends (1)-(2): a whole-word choice below the occupancy floor
+     * Refinement to (1)-(2): a whole-word choice below the occupancy floor
      * trigger is offered to the hyphenated candidate at the grown box, and
      * adopted only when it strictly beats whole-word on both font size and
      * occupancy ([considerFloorAdoption]).
