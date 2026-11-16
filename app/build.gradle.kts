@@ -99,6 +99,15 @@ tasks.withType<Test>().configureEach {
     providers.gradleProperty("real.out").orNull?.let { o -> systemProperty("real.out", o) }
     testLogging { showStandardStreams = true }
   }
+
+  // Same mechanism for the typeset stage re-render proof (`-Prender.input=...`).
+  providers.gradleProperty("render.input").orNull?.let {
+    systemProperty("render.input", it)
+    providers.gradleProperty("render.cleanDir").orNull?.let { v -> systemProperty("render.cleanDir", v) }
+    providers.gradleProperty("render.outDir").orNull?.let { v -> systemProperty("render.outDir", v) }
+    providers.gradleProperty("render.pages").orNull?.let { v -> systemProperty("render.pages", v) }
+    testLogging { showStandardStreams = true }
+  }
 }
 
 // Some unused dependencies are commented out below instead of being removed.

@@ -18,6 +18,9 @@ import kotlin.math.min
 
 object Typesetter {
 
+    /** Test/render-proof hook: receives the one layout decision per unit. */
+    internal var onLayoutDecided: ((bubbleId: Int, bubbleType: String, decidedText: String, lines: List<String>, hyphenated: Boolean) -> Unit)? = null
+
     suspend fun typesetBubbles(
         context: Context,
         wipedBitmap: Bitmap,
@@ -82,40 +85,38 @@ object Typesetter {
             }
 
             val baseSizePx = bubble.fontSizeSp * densityScale * (if (isShout) 1.10f else 1.0f)
-            var (optimalLayout, optimalPaint) = calculateBestLayoutBinarySearch(
+            val minReadablePx = if (isFloating) (baseSizePx * 0.25f).coerceAtLeast(6f * densityScale)
+                else (baseSizePx * 0.40f).coerceAtLeast(9f * densityScale)
+
+            // Grow step (Commander fallback order): the box may expand only
+            // inside the bubble interior — 90% of the bubble box for balloons.
+            // For free text the interior is the Japanese extent itself, so the
+            // grown box is the extent minus a hairline inset, never artwork.
+            val grownWidth = if (isFloating) (boxWidth - 4f * densityScale).toInt().coerceAtLeast(availableWidth)
+                else (boxWidth * 0.90f).toInt().coerceAtLeast(availableWidth)
+            val grownHeight = if (isFloating) (boxHeight - 4f * densityScale).coerceAtLeast(availableHeight)
+                else (boxHeight * 0.90f).coerceAtLeast(availableHeight)
+
+            // One word-break decision per unit, in the Commander's order:
+            // shrink + re-wrap whole words, then grow inside the interior,
+            // then hyphenate at a syllable. Every layout drawn below (fill,
+            // stroke) is built from this decision's text.
+            val choice = calculateBestLayout(
                 text = text,
                 availableWidth = availableWidth,
                 availableHeight = availableHeight,
+                grownWidth = grownWidth,
+                grownHeight = grownHeight,
                 maxSizePx = baseSizePx * 1.30f,
-                minSizePx = if (isFloating) (baseSizePx * 0.25f).coerceAtLeast(6f * densityScale)
-                    else (baseSizePx * 0.40f).coerceAtLeast(9f * densityScale),
+                minSizePx = minReadablePx,
                 typeface = typeface,
                 maxLines = maxLines,
                 isShout = isShout
             )
-
-            // Shrink-to-fit second pass (BACKLOG:13): a unit whose text still does
-            // not fit at the normal minimum size is searched again down to a 4px
-            // floor with more lines, so the English is fitted inside the extent
-            // (smaller, but whole) instead of overflowing or being amputated.
-            // Units that already fit never reach this branch, so accepted pages
-            // keep the exact size they had.
-            if (optimalLayout.height > availableHeight) {
-                val (fittedLayout, fittedPaint) = calculateBestLayoutBinarySearch(
-                    text = text,
-                    availableWidth = availableWidth,
-                    availableHeight = availableHeight,
-                    maxSizePx = optimalPaint.textSize,
-                    minSizePx = 4f,
-                    typeface = typeface,
-                    maxLines = maxLines * 3,
-                    isShout = isShout
-                )
-                if (fittedLayout.height < optimalLayout.height) {
-                    optimalLayout = fittedLayout
-                    optimalPaint = fittedPaint
-                }
-            }
+            val optimalLayout = choice.layout
+            val optimalPaint = choice.paint
+            val layoutWidthUsed = choice.widthPx
+            onLayoutDecided?.invoke(bubble.id, bubble.type, text, choice.lines, choice.hyphenated)
 
             // Dual-Pass Rendering:
             // Pass 1: Crisp white outer stroke halo (guarantees readability on screentones & dark art)
@@ -128,23 +129,27 @@ object Typesetter {
                 color = Color.WHITE
             }
 
+            // Stroke pass is built from the same decided text and width as the
+            // fill pass, so it cannot re-wrap (or re-split) a word.
             val strokeLayout = StaticLayout.Builder
-                .obtain(text, 0, text.length, strokePaint, availableWidth)
+                .obtain(choice.text, 0, choice.text.length, strokePaint, layoutWidthUsed)
                 .setAlignment(Layout.Alignment.ALIGN_CENTER)
                 .setLineSpacing(0f, 0.92f)
                 .setIncludePad(false)
-                .setMaxLines(maxLines)
+                .setMaxLines(choice.lines.size.coerceAtLeast(1))
+                .setBreakStrategy(Layout.BREAK_STRATEGY_HIGH_QUALITY)
+                .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
                 .build()
 
             // Draw centered within the unit's extent: Stroke first, then solid fill.
             // Render check (BACKLOG:13): flag any layout that could not be fitted
             // inside its extent even at the minimum size, then clip the draw to
             // the extent so no glyph is ever painted outside it.
-            if (optimalLayout.height > availableHeight || optimalLayout.width > availableWidth) {
+            if (optimalLayout.height > grownHeight || optimalLayout.width > grownWidth) {
                 android.util.Log.w(
                     "Typesetter",
                     "bubble #${bubble.id} type=${bubble.type} does not fit its extent: " +
-                        "layout ${optimalLayout.width}x${optimalLayout.height} > available ${availableWidth}x${availableHeight.toInt()} — clipped to extent"
+                        "layout ${optimalLayout.width}x${optimalLayout.height} > available ${grownWidth}x${grownHeight.toInt()} — clipped to extent"
                 )
             }
             canvas.save()
@@ -163,73 +168,132 @@ object Typesetter {
         resultBitmap
     }
 
-    private fun calculateBestLayoutBinarySearch(
+    /** The one word-break decision for a unit: every drawn layout uses it. */
+    internal data class LayoutChoice(
+        val layout: StaticLayout,
+        val paint: TextPaint,
+        val text: String,
+        val lines: List<String>,
+        val widthPx: Int,
+        val hyphenated: Boolean
+    )
+
+    private fun makePaint(sizePx: Float, typeface: Typeface, isShout: Boolean) =
+        TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.BLACK
+            textSize = sizePx
+            this.typeface = typeface
+            if (isShout) isFakeBoldText = true
+            textAlign = Paint.Align.LEFT
+        }
+
+    private fun buildLayout(text: String, paint: TextPaint, widthPx: Int, lineCount: Int): StaticLayout =
+        StaticLayout.Builder
+            .obtain(text, 0, text.length, paint, widthPx)
+            .setAlignment(Layout.Alignment.ALIGN_CENTER)
+            .setLineSpacing(0f, 0.92f)
+            .setIncludePad(false)
+            .setMaxLines(lineCount.coerceAtLeast(1))
+            .setBreakStrategy(Layout.BREAK_STRATEGY_HIGH_QUALITY)
+            .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
+            .build()
+
+    internal fun layoutLines(layout: StaticLayout): List<String> =
+        (0 until layout.lineCount).map {
+            layout.text.subSequence(layout.getLineStart(it), layout.getLineEnd(it)).toString().trim()
+        }
+
+    /**
+     * Largest size in [minSizePx, maxSizePx] whose whole-word (or, when
+     * [hyphenate], syllable-hyphenated) wrap fits [widthPx] x [heightPx].
+     * A candidate is rejected when Android's own layout disagrees with the
+     * decided lines — that disagreement is exactly a silent mid-word split.
+     */
+    private fun searchLayout(
         text: String,
-        availableWidth: Int,
-        availableHeight: Float,
+        widthPx: Int,
+        heightPx: Float,
         maxSizePx: Float,
         minSizePx: Float,
         typeface: Typeface,
         maxLines: Int,
-        isShout: Boolean = false
-    ): Pair<StaticLayout, TextPaint> {
+        isShout: Boolean,
+        hyphenate: Boolean
+    ): LayoutChoice? {
+        fun candidate(sizePx: Float): LayoutChoice? {
+            val paint = makePaint(sizePx, typeface, isShout)
+            val probe = TextPaint(paint)
+            val wrap = WordWrap.wrap(text, widthPx.toFloat(), sizePx, hyphenate) { s, size ->
+                probe.textSize = size
+                probe.measureText(s)
+            } ?: return null
+            if (wrap.lines.size > maxLines) return null
+            val layout = buildLayout(wrap.text, paint, widthPx, wrap.lines.size)
+            if (layout.height > heightPx) return null
+            if (layoutLines(layout) != wrap.lines) return null
+            if (WordWrap.hasUnhyphenatedMidWordSplit(text, wrap.lines)) return null
+            return LayoutChoice(layout, paint, wrap.text, wrap.lines, widthPx, wrap.hyphenated)
+        }
+
         var low = minSizePx
         var high = maxSizePx
-        var bestSize = minSizePx
-        var bestLayout: StaticLayout? = null
-        var bestPaint: TextPaint? = null
-
+        var best: LayoutChoice? = null
         // Binary search for optimal text size with 0.5px precision
         for (i in 0 until 8) {
             val mid = (low + high) / 2f
-            val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.BLACK
-                textSize = mid
-                this.typeface = typeface
-                if (isShout) {
-                    isFakeBoldText = true
-                }
-                textAlign = Paint.Align.LEFT
-            }
-
-            val layout = StaticLayout.Builder
-                .obtain(text, 0, text.length, textPaint, availableWidth)
-                .setAlignment(Layout.Alignment.ALIGN_CENTER)
-                .setLineSpacing(0f, 0.92f)
-                .setIncludePad(false)
-                .setMaxLines(maxLines)
-                .build()
-
-            if (layout.height <= availableHeight && layout.lineCount <= maxLines) {
-                bestSize = mid
-                bestLayout = layout
-                bestPaint = textPaint
+            val choice = candidate(mid)
+            if (choice != null) {
+                best = choice
                 low = mid + 0.5f // Try larger font
             } else {
                 high = mid - 0.5f // Try smaller font
             }
         }
+        return best ?: candidate(minSizePx)
+    }
 
-        if (bestLayout == null) {
-            val fallbackPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.BLACK
-                textSize = minSizePx
-                this.typeface = typeface
-                if (isShout) {
-                    isFakeBoldText = true
-                }
-            }
-            bestLayout = StaticLayout.Builder
-                .obtain(text, 0, text.length, fallbackPaint, availableWidth)
-                .setAlignment(Layout.Alignment.ALIGN_CENTER)
-                .setLineSpacing(0f, 0.90f)
-                .setIncludePad(false)
-                .setMaxLines(maxLines)
-                .build()
-            bestPaint = fallbackPaint
+    /**
+     * Commander fallback order: (1) shrink the font and re-wrap whole words,
+     * (2) grow the box inside the bubble interior / free-text extent,
+     * (3) hyphenate at a syllable with a visible hyphen. Last resort keeps
+     * the BACKLOG:13 shrink-to-fit floor (4px, more lines) under the same
+     * hyphenation rules, so a split without a hyphen is never emitted.
+     */
+    internal fun calculateBestLayout(
+        text: String,
+        availableWidth: Int,
+        availableHeight: Float,
+        grownWidth: Int,
+        grownHeight: Float,
+        maxSizePx: Float,
+        minSizePx: Float,
+        typeface: Typeface,
+        maxLines: Int,
+        isShout: Boolean = false
+    ): LayoutChoice {
+        searchLayout(text, availableWidth, availableHeight, maxSizePx, minSizePx, typeface, maxLines, isShout, hyphenate = false)
+            ?.let { return it }
+        searchLayout(text, grownWidth, grownHeight, maxSizePx, minSizePx, typeface, maxLines, isShout, hyphenate = false)
+            ?.let { return it }
+        searchLayout(text, grownWidth, grownHeight, maxSizePx, minSizePx, typeface, maxLines, isShout, hyphenate = true)
+            ?.let { return it }
+        searchLayout(text, grownWidth, grownHeight, minSizePx, 4f, typeface, maxLines * 3, isShout, hyphenate = true)
+            ?.let { return it }
+
+        // Nothing fitted: emit the hyphenated wrap at the floor size anyway
+        // (caller logs and clips to the extent) rather than a silent split.
+        val paint = makePaint(minSizePx, typeface, isShout)
+        val probe = TextPaint(paint)
+        val wrap = WordWrap.wrap(text, grownWidth.toFloat(), minSizePx, hyphenate = true) { s, size ->
+            probe.textSize = size
+            probe.measureText(s)
         }
-
-        return Pair(bestLayout, bestPaint ?: TextPaint())
+        val lines = wrap?.lines ?: listOf(text)
+        val decidedText = wrap?.text ?: text
+        return LayoutChoice(
+            buildLayout(decidedText, paint, grownWidth, lines.size),
+            paint, decidedText, lines, grownWidth, wrap?.hyphenated ?: false
+        )
     }
 }
 
