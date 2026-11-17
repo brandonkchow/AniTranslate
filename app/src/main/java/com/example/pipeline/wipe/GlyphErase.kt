@@ -20,12 +20,38 @@ package com.example.pipeline.wipe
  * side of the bridge, because the outline's core is claiming from the other
  * end. A component whose claimed fringe reaches the box border is border-
  * touching after all and survives.
+ *
+ * Perimeter ring (bubble fix, Commander 2026-11-17): a spiky bubble's outline
+ * is a ring of radial strokes, and at the corners those strokes are separate
+ * components that float inside the box, exactly like glyphs — the floating
+ * rule above ate them. Measured on page-08 id1, the floating outline
+ * components sit in the outer band of the box (box-edge distance 1–41px on a
+ * 246px box) while every glyph sits deep inside it (71px or more), and the
+ * outline components are not elongated — their aspect and size match the
+ * glyphs, apart from one elongated glyph stroke — so position, not shape, is
+ * the description that separates them. A floating component whose bounding
+ * box lies in the outer [PERIMETER_RING_FRACTION] band of the box is
+ * therefore structure too. Protected components keep their original pixels
+ * by construction: they are never wipe seeds, and the halo is clipped
+ * against them.
  */
 object GlyphErase {
 
     private const val UNCLASSIFIED = 0
     private const val GLYPH = 1
     private const val STRUCTURE = 2
+
+    /**
+     * Width of the box's outer band, as a fraction of the box's smaller side,
+     * inside which a floating component is outline, not text. Measured on
+     * page-08 id1, the corner outline components sit at box-edge distance up
+     * to 0.06 of the smaller side while every glyph in the five measured
+     * units (page-08 id1/id10, page-07 id3, page-01 id3, page-10 id10) sits
+     * at 0.11 or more, and the tight-bubble unit fixtures place lettering at
+     * 0.075 — 0.06 is the widest band that protects the measured corner
+     * spokes without reaching any measured glyph.
+     */
+    private const val PERIMETER_RING_FRACTION = 0.06
 
     /**
      * @param wipe pixels to repaint: the floating components plus a clipped halo.
@@ -43,7 +69,15 @@ object GlyphErase {
     )
 
     /** One labelled component: its pixels, and whether it touches the box border. */
-    private class Component(val pixels: IntArray, val touchesEdge: Boolean)
+    private class Component(
+        val pixels: IntArray,
+        val touchesEdge: Boolean,
+        /** True when the bounding box lies in the box's outer perimeter band. */
+        val inPerimeterRing: Boolean
+    ) {
+        /** Border-touching and perimeter-ring components both survive the wipe. */
+        val preserved: Boolean get() = touchesEdge || inPerimeterRing
+    }
 
     /**
      * Split [ink] into floating and border-touching components.
@@ -85,6 +119,14 @@ object GlyphErase {
 
         // Label the 8-connected components of [mask].
         fun componentsOf(mask: BooleanArray): List<Component> {
+            // The perimeter band is measured in the same frame that decides
+            // border-touching: the detector's box, or the region itself when
+            // the caller does not clip to the box edge.
+            val frameLeft = if (clipToBoxEdge) box.left else 0
+            val frameTop = if (clipToBoxEdge) box.top else 0
+            val frameWidth = if (clipToBoxEdge) box.width else width
+            val frameHeight = if (clipToBoxEdge) box.height else height
+            val ringWidth = (minOf(frameWidth, frameHeight) * PERIMETER_RING_FRACTION).toInt()
             val visited = BooleanArray(count)
             val stack = IntArray(count)
             val components = mutableListOf<Component>()
@@ -92,6 +134,10 @@ object GlyphErase {
                 if (!mask[start] || visited[start]) continue
                 val pixels = mutableListOf<Int>()
                 var touchesEdge = false
+                var minX = Int.MAX_VALUE
+                var maxX = Int.MIN_VALUE
+                var minY = Int.MAX_VALUE
+                var maxY = Int.MIN_VALUE
                 var top = 0
                 visited[start] = true
                 stack[top++] = start
@@ -100,6 +146,10 @@ object GlyphErase {
                     pixels += i
                     val x = i % width
                     val y = i / width
+                    if (x < minX) minX = x
+                    if (x > maxX) maxX = x
+                    if (y < minY) minY = y
+                    if (y > maxY) maxY = y
                     if (touchesBoxEdge(x, y)) touchesEdge = true
                     // 8-connected: a glyph's diagonal strokes are one component, not several.
                     for (dy in -1..1) {
@@ -117,7 +167,19 @@ object GlyphErase {
                         }
                     }
                 }
-                components += Component(pixels.toIntArray(), touchesEdge)
+                // Distance from the bounding box to the nearest frame border:
+                // a component in the outer band is perimeter, not interior text.
+                val edgeDistance = minOf(
+                    minX - frameLeft,
+                    minY - frameTop,
+                    (frameLeft + frameWidth - 1) - maxX,
+                    (frameTop + frameHeight - 1) - maxY
+                )
+                components += Component(
+                    pixels.toIntArray(),
+                    touchesEdge,
+                    inPerimeterRing = edgeDistance <= ringWidth
+                )
             }
             return components
         }
@@ -149,7 +211,7 @@ object GlyphErase {
             // and the outline is claimed by the lettering's side, so the wipe
             // covers the glyph's own anti-aliasing instead of leaving it as
             // outline-owned fringe.
-            val seedOrder = components.indices.sortedBy { components[it].touchesEdge }
+            val seedOrder = components.indices.sortedBy { components[it].preserved }
             for (index in seedOrder) {
                 for (i in components[index].pixels) {
                     owner[i] = index
@@ -187,20 +249,20 @@ object GlyphErase {
                 if (o < 0) continue
                 val component = components[o]
                 pixelClass[i] =
-                    if (component.touchesEdge || claimedTouchesEdge[o]) STRUCTURE else GLYPH
+                    if (component.preserved || claimedTouchesEdge[o]) STRUCTURE else GLYPH
             }
             // Loose ink with no core at all (a pure fringe speck) is labelled on
             // its own loose component, exactly as all ink is without cores.
             val leftover = BooleanArray(count) { ink[it] && owner[it] < 0 }
             if (leftover.any { it }) {
                 for (component in componentsOf(leftover)) {
-                    val cls = if (component.touchesEdge) STRUCTURE else GLYPH
+                    val cls = if (component.preserved) STRUCTURE else GLYPH
                     for (i in component.pixels) pixelClass[i] = cls
                 }
             }
         } else {
             for (component in componentsOf(ink)) {
-                val cls = if (component.touchesEdge) STRUCTURE else GLYPH
+                val cls = if (component.preserved) STRUCTURE else GLYPH
                 for (i in component.pixels) pixelClass[i] = cls
             }
         }

@@ -165,8 +165,9 @@ object BubbleInkMask {
         // Wipe 1b (Commander 2026-11-17): inside the detector box, a dark
         // connected component that does not touch the box border is text and
         // is erased whole; a border-touching component is the bubble outline
-        // (or ink fused to it) and survives. No enclosure promotion, no fitted
-        // shape, no glyph-vs-structure shape classifier.
+        // (or ink fused to it) and survives. Bubble fix (same day): a floating
+        // component in the box's outer perimeter band is outline too — a
+        // spiky bubble's corner strokes float there (see GlyphErase).
         val boxInk = inkWithin(luminance, boxMask, bgLum, isInverted)
         if (boxInk.count >= MIN_TEXT_PIXELS) {
             val boxCore = inkWithin(luminance, boxMask, bgLum, isInverted, CORE_TOLERANCE)

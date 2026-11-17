@@ -139,6 +139,25 @@ class GlyphEraseTest {
     }
 
     @Test
+    fun `keeps a floating component in the perimeter ring and erases an interior glyph`() {
+        // Bubble fix (Commander 2026-11-17), measured on page-08 id1: a spiky
+        // bubble's corner strokes are floating components in the box's outer
+        // band, glyph-sized and glyph-shaped; the glyphs sit deep inside.
+        // Ring width here is 6% of 60 = 3px.
+        val ink = blank().also {
+            paint(it, 3, 24, 9, 30) // floating, 3px from the left border: a corner spoke
+            paint(it, 24, 24, 30, 30) // interior glyph, 24px from the nearest border
+        }
+
+        val result = run(ink)
+
+        assertEquals("only the interior glyph is text", 36, result.glyphPixels)
+        assertEquals("the perimeter-ring spoke is structure", 36, result.structurePixels)
+        assertEquals("no wipe pixel lands on the spoke", 0, wipedIn(result.wipe, 3, 24, 9, 30))
+        assertTrue("the interior glyph is wiped", result.wipe[27 * size + 27])
+    }
+
+    @Test
     fun `erases nothing when every component is structure`() {
         val ink = blank().also { paint(it, 0, 0, size, 3) }
 
