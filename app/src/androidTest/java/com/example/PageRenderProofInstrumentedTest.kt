@@ -1,6 +1,8 @@
 package com.example
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -15,6 +17,7 @@ import com.example.net.OpenAiCompatibleClient
 import com.example.pipeline.PagePipeline
 import com.example.pipeline.read.BaberuModelManager
 import com.example.pipeline.router.KeyRouter
+import com.example.pipeline.typeset.Typesetter
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
@@ -66,6 +69,10 @@ class PageRenderProofInstrumentedTest {
 
         val pipeline = PagePipeline(ctx, KeyRouter(SlotStorage.getInstance(ctx)), GeminiClient(), OpenAiCompatibleClient())
         val summary = JSONArray()
+        val layoutDumpFile = File(outDir, "layout_dump.txt")
+        if (filter.isNullOrBlank()) {
+            layoutDumpFile.writeText("")
+        }
 
         for (name in pages) {
             // Page identity comes from the file name, never from position in a
@@ -73,6 +80,7 @@ class PageRenderProofInstrumentedTest {
             // (BACKLOG:11 root cause in this driver).
             val pageNum = Regex("page-(\\d+)").find(name)?.groupValues?.get(1)?.toIntOrNull()
                 ?: throw AssertionError("cannot parse page number from $name")
+            val pageTag = "page-${pageNum.toString().padStart(2, '0')}"
             val src = File(ctx.filesDir, "render_in_$name")
             testCtx.assets.open("baberu_gt/clean/$name").use { input ->
                 src.outputStream().use { input.copyTo(it) }
@@ -81,7 +89,28 @@ class PageRenderProofInstrumentedTest {
                 id = 900L + (pageNum - 1), jobId = 777L, pageIndex = pageNum - 1,
                 originalImageUri = "", originalCachePath = src.absolutePath
             )
-            val result = runBlocking { pipeline.processPage(page) { } }
+            val pageDecisions = linkedMapOf<Int, JSONObject>()
+            Typesetter.onLayoutDecided = { bubbleId, bubbleType, decidedText, lines, hyphenated, fontSizePx, phase, lineCount, occupancy ->
+                val obj = JSONObject()
+                    .put("page", pageTag)
+                    .put("id", bubbleId)
+                    .put("type", bubbleType)
+                    .put("text", decidedText)
+                    .put("lines", JSONArray(lines))
+                    .put("hyphenated", hyphenated)
+                    .put("fontSizePx", fontSizePx.toDouble())
+                    .put("phase", phase)
+                    .put("lineCount", lineCount)
+                    .put("occupancy", occupancy)
+                synchronized(pageDecisions) {
+                    pageDecisions[bubbleId] = obj
+                }
+            }
+            val result = try {
+                runBlocking { pipeline.processPage(page) { } }
+            } finally {
+                Typesetter.onLayoutDecided = null
+            }
             val rec = JSONObject()
                 .put("page", name).put("status", result.status.name)
                 .put("bubbles", result.getBubbles().size)
@@ -90,6 +119,25 @@ class PageRenderProofInstrumentedTest {
                 val dest = File(outDir, name.substringBeforeLast('.') + "_translated.jpg")
                 File(result.finalImagePath).copyTo(dest, overwrite = true)
                 rec.put("outBytes", dest.length())
+            }
+            if (result.wipedImagePath.isNotBlank() && File(result.wipedImagePath).exists()) {
+                val wipedDest = File(outDir, name.substringBeforeLast('.') + "_wiped.jpg")
+                val bmp = BitmapFactory.decodeFile(result.wipedImagePath)
+                if (bmp != null) {
+                    wipedDest.outputStream().use { out ->
+                        bmp.compress(Bitmap.CompressFormat.JPEG, 92, out)
+                    }
+                    bmp.recycle()
+                } else {
+                    File(result.wipedImagePath).copyTo(wipedDest, overwrite = true)
+                }
+            }
+            val sidecarSrc = File(ctx.cacheDir, "sidecar_${page.id}.json")
+            if (sidecarSrc.exists()) {
+                sidecarSrc.copyTo(File(outDir, "sidecar_${page.id}.json"), overwrite = true)
+            }
+            if (pageDecisions.isNotEmpty()) {
+                layoutDumpFile.appendText(pageDecisions.values.joinToString("\n") { it.toString() } + "\n")
             }
             Log.i(TAG, rec.toString())
             summary.put(rec)
