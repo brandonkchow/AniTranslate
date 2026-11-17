@@ -70,6 +70,67 @@ class WipeContainmentAndResidueTest {
     }
 
     @Test
+    fun `structure-classified ink inside detector box is wiped while outside-box structure survives and outside-box glyph is wiped`() {
+        val pixels = IntArray(size * size) { paper }
+        val bubbleMask = BooleanArray(size * size) { i ->
+            val x = i % size
+            val y = i / size
+            x in 5 until 75 && y in 5 until 75
+        }
+
+        // Tall merged glyph column inside the detector box (x=24..28, y=18..42, height=24 > 0.45*40).
+        // GlyphErase classifies this as structure due to its extent, yet it sits inside the box.
+        for (y in 18 until 42) {
+            for (x in 24 until 28) {
+                pixels[y * size + x] = ink
+            }
+        }
+
+        // Long structure stroke inside the enclosure, outside the detector box (x=60..63, y=5..75).
+        for (y in 5 until 75) {
+            for (x in 60 until 63) {
+                pixels[y * size + x] = ink
+            }
+        }
+
+        // Compact glyph inside the enclosure, outside the detector box (x=66..71, y=20..25).
+        for (y in 20 until 25) {
+            for (x in 66 until 71) {
+                pixels[y * size + x] = ink
+            }
+        }
+
+        val box = BubbleInkMask.BoxFrame(left = 10, top = 10, width = 40, height = 40, inset = 0)
+        val plan = BubbleInkMask.plan(
+            pixels = pixels,
+            width = size,
+            height = size,
+            bgColor = paper,
+            shape = BubbleInterior.Shape.ELLIPSE,
+            densityScale = 1f,
+            box = box,
+            bubbleMask = bubbleMask
+        )
+
+        assertTrue(
+            "structure-classified ink inside the detector box must be wiped",
+            plan.wipe[30 * size + 26]
+        )
+        assertFalse(
+            "structure ink outside the detector box must NOT be wiped",
+            plan.wipe[40 * size + 61]
+        )
+        assertTrue(
+            "outside-box structure ink must be recorded as structure",
+            plan.structure[40 * size + 61]
+        )
+        assertTrue(
+            "classifier-confirmed glyph outside the detector box inside the enclosure must be wiped",
+            plan.wipe[22 * size + 68]
+        )
+    }
+
+    @Test
     fun `sampleInteriorColor ignores shaded corner probes and returns paper white`() {
         val w = 100
         val h = 100

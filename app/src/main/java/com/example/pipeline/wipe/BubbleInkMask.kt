@@ -189,10 +189,10 @@ object BubbleInkMask {
                     clipToBoxEdge = false
                 )
                 val glyphMask = BooleanArray(count) { i ->
-                    bubbleMask[i] && glyph.glyph[i]
+                    bubbleMask[i] && (glyph.glyph[i] || (inside.mask[i] && rawBoxMask[i]))
                 }
                 val structureMask = BooleanArray(count) { i ->
-                    bubbleMask[i] && glyph.structure[i]
+                    bubbleMask[i] && glyph.structure[i] && !rawBoxMask[i]
                 }
                 val bounds = BooleanArray(count) { i -> bubbleMask[i] && !structureMask[i] }
                 return Plan(
