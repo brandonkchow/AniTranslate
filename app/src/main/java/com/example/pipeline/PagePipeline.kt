@@ -20,6 +20,7 @@ import com.example.pipeline.detect.BubbleTextMerger
 import com.example.pipeline.detect.DetectedRegion
 import com.example.pipeline.detect.DetectorPostProcess
 import com.example.pipeline.detect.OnnxBubbleDetector
+import com.example.pipeline.detect.TextClassifier
 import com.example.pipeline.image.ImageScaler
 import com.example.pipeline.read.BaberuModelManager
 import com.example.pipeline.read.BaberuOcrReader
@@ -390,15 +391,17 @@ class PagePipeline(
                 ).filter { it.text.isNotBlank() }
 
                 val placedFromDetector = merged.count { it.source == BubbleTextMerger.SOURCE_DETECTOR }
-                bubbles = merged.mapIndexed { index, m ->
-                    Bubble(
-                        id = index + 1,
-                        text = m.text,
-                        box = m.box,
-                        vertical = m.vertical,
-                        type = if (m.source == BubbleTextMerger.SOURCE_FLOATING) "floating" else "bubble"
-                    )
-                }
+                bubbles = TextClassifier.classifyAll(
+                    merged.mapIndexed { index, m ->
+                        Bubble(
+                            id = index + 1,
+                            text = m.text,
+                            box = m.box,
+                            vertical = m.vertical,
+                            type = if (m.source == BubbleTextMerger.SOURCE_FLOATING) "floating" else "bubble"
+                        )
+                    }
+                )
 
                 if (detectorBubbles.isNotEmpty()) {
                     RunLogger.logPageEvent(
@@ -434,7 +437,7 @@ class PagePipeline(
                 RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "DETECT_DONE", "Detected ${bubbles.size} text regions in ${totalStageMs}ms:")
                 bubbles.forEach { b ->
                     val boxStr = "[${String.format(java.util.Locale.US, "%.3f,%.3f,%.3f,%.3f", b.x1, b.y1, b.x2, b.y2)}]"
-                    RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "DETECT_ITEM", "  #${b.id} $boxStr (type=${b.type}, vert=${b.vertical}): \"${b.text.replace("\n", " ")}\"")
+                    RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "DETECT_ITEM", "  #${b.id} $boxStr (type=${b.type}, class=${b.textClass}, vert=${b.vertical}): \"${b.text.replace("\n", " ")}\"")
                 }
             }
             currentPage = currentPage.copy(
@@ -451,13 +454,14 @@ class PagePipeline(
         // skipped and the typesetter's fallback order stands.
         var retrySlot: ApiSlot? = null
         var retryModel: String? = null
-        val needsTranslation = bubbles.any { it.translated.isBlank() && it.text.isNotBlank() }
+        val needsTranslation = bubbles.any { !it.isNonBalloon && it.translated.isBlank() && it.text.isNotBlank() }
         if (needsTranslation || currentPage.lastStageAttempted == "TRANSLATE") {
             currentPage = currentPage.copy(status = PageStatus.TRANSLATING, lastStageAttempted = "TRANSLATE")
             onStatusUpdate(currentPage)
 
             // Sort bubbles in Manga reading order for coherent scene flow
             bubbles = Bubble.sortByMangaReadingOrder(bubbles)
+            val translatableBubbles = bubbles.filter { !it.isNonBalloon && it.text.isNotBlank() }
 
             // Extract context from preceding page in the same job for narrative continuity
             val storyContext = buildString {
@@ -548,7 +552,7 @@ class PagePipeline(
                     val attemptSuffix = if (totalTranslateAttempts > 1) " (fallback attempt $totalTranslateAttempts/$translateBudget)" else ""
                     RunLogger.logPageEvent(
                         context, currentPage.jobId, currentPage.pageIndex, "TRANSLATE_START",
-                        "Translating ${bubbles.size} bubbles with ${slot.displayTitle} ($candidateModel)$attemptSuffix"
+                        "Translating ${translatableBubbles.size} bubbles with ${slot.displayTitle} ($candidateModel)$attemptSuffix"
                     )
                     onStatusUpdate(currentPage)
 
@@ -561,10 +565,10 @@ class PagePipeline(
                             resolvedBaseUrl,
                             s.apiKey,
                             candidateModel,
-                            bubbles,
+                            translatableBubbles,
                             provider = ApiProvider.GEMINI,
                             storyContext = storyContext,
-                            budgets = BubbleBudget.budgetsFor(bubbles, currentPage.width, currentPage.height)
+                            budgets = BubbleBudget.budgetsFor(translatableBubbles, currentPage.width, currentPage.height)
                         )
                     }
                     val elapsedMs = attemptElapsedMs
@@ -586,8 +590,7 @@ class PagePipeline(
 
                     val translations = transResult.getOrNull().orEmpty()
                     bubbles = bubbles.map { b ->
-                        val trans = translations[b.id] ?: b.translated
-                        b.copy(translated = trans)
+                        if (b.isNonBalloon) b else b.copy(translated = translations[b.id] ?: b.translated)
                     }
                     RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "TRANSLATE_DONE", "Translated ${translations.size} bubbles in ${elapsedMs}ms via ${slot.displayTitle} ($candidateModel):")
                     bubbles.forEach { b ->

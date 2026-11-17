@@ -3,6 +3,12 @@ package com.example.data.models
 import org.json.JSONArray
 import org.json.JSONObject
 
+enum class TextClass {
+    DIALOGUE,
+    INFO,
+    SKIP
+}
+
 data class Bubble(
     val id: Int,
     val text: String, // Source Japanese text
@@ -11,7 +17,8 @@ data class Bubble(
     var translated: String = "",
     var fontSizeSp: Float = 14f,
     var visible: Boolean = true,
-    val type: String = "bubble" // "bubble", "narration", "floating", "side_text"
+    val type: String = "bubble", // "bubble", "narration", "floating", "side_text"
+    val textClass: TextClass = TextClass.DIALOGUE
 ) {
     val x1: Float get() = box.getOrNull(0)?.coerceIn(0f, 1f) ?: 0f
     val y1: Float get() = box.getOrNull(1)?.coerceIn(0f, 1f) ?: 0f
@@ -29,7 +36,8 @@ data class Bubble(
      * with the wipe/write extent derived from the Japanese text block's own box
      * and the English fitted inside it. Only `side_text` remains out of scope.
      */
-    val isNonBalloon: Boolean get() = type.lowercase() in NON_BALLOON_TYPES
+    val isNonBalloon: Boolean
+        get() = type.lowercase() in NON_BALLOON_TYPES || textClass == TextClass.SKIP
 
     fun toJson(): JSONObject {
         return JSONObject().apply {
@@ -43,6 +51,9 @@ data class Bubble(
             put("fontSizeSp", fontSizeSp.toDouble())
             put("visible", visible)
             put("type", type)
+            if (textClass != TextClass.DIALOGUE) {
+                put("textClass", textClass.name)
+            }
         }
     }
 
@@ -93,6 +104,10 @@ data class Bubble(
                 else -> "bubble"
             }
 
+            val textClassRaw = json.optString("textClass", "")
+            val textClass = TextClass.entries.find { it.name.equals(textClassRaw, ignoreCase = true) }
+                ?: TextClass.DIALOGUE
+
             return Bubble(
                 id = id,
                 text = text,
@@ -101,7 +116,8 @@ data class Bubble(
                 translated = translated,
                 fontSizeSp = fontSizeSp,
                 visible = visible,
-                type = type
+                type = type,
+                textClass = textClass
             )
         }
 
