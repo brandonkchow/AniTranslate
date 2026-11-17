@@ -118,9 +118,8 @@ object BubbleInkMask {
      * @param bgColor the sampled interior colour, used as both the ink reference and the fill.
      * @param shape the interior shape chosen for this region, used only by the fitted fallback.
      * @param densityScale scales kernel sizes with image resolution.
-     * @param bubbleMask the segmenter's measured bubble interior in region coordinates, or null to
-     *   read the bubble's extent off the detector's box alone. When present it is the authority on
-     *   where the bubble is: nothing outside it is ever repainted, and ink inside it is text.
+     * Box-only (wipe-reset 2026-11-16): no measured enclosure is supplied or consumed.
+     * The detector box is the only authority on where the wipe may repaint.
      */
     fun plan(
         pixels: IntArray,
@@ -129,8 +128,7 @@ object BubbleInkMask {
         bgColor: Int,
         shape: BubbleInterior.Shape,
         densityScale: Float,
-        box: BoxFrame,
-        bubbleMask: BooleanArray? = null
+        box: BoxFrame
     ): Plan {
         val count = width * height
         require(count > 0) { "region must not be empty" }
@@ -156,100 +154,24 @@ object BubbleInkMask {
         val isInverted = bgLum <= INVERTED_BG_LUMINANCE
         val radius = (1.5f * densityScale).toInt().coerceIn(1, 3)
 
-        // The detector's box, lifted into the region's coordinates, intersected with the measured
-        // interior when the segmenter supplied one.
-        //
-        // When a measured interior is supplied (bubbleMask != null), that measurement is the authority
-        // on where the bubble is: ink inside bubbleMask is text by construction, and the wall/glyph
-        // classifier and dilate bounds must never reach outside bubbleMask. When bubbleMask == null,
-        // the detector's box remains the authority, exactly as before.
-        require(bubbleMask == null || bubbleMask.size >= count) {
-            "bubble mask needs $count values, got ${bubbleMask?.size}"
-        }
+        // The detector's box, lifted into the region's coordinates. It is the sole bound.
         val rawBoxMask = BooleanArray(count) { i ->
             val x = (i % width) - box.left
             val y = (i / width) - box.top
             x in 0 until box.width && y in 0 until box.height
         }
-        val candidateBounds = if (bubbleMask != null) bubbleMask else rawBoxMask
-        var boxMask = candidateBounds
+        val boxMask = rawBoxMask
 
-        // When a measured bubble interior is provided, it is the outer wall of protection:
-        // any ink inside bubbleMask is text, and dilate bounds never extend outside it.
-        // A supplied mask with almost no ink in it is not this bubble's interior — a wrong
-        // small component adopted by centre or vote (an edge-sealed component can be one);
-        // returning its empty plan would leave the lettering standing, so fall through to
-        // the box classification below instead.
-        if (bubbleMask != null) {
-            val inside = inkWithin(luminance, bubbleMask, bgLum, isInverted)
-            if (inside.count >= MIN_TEXT_PIXELS) {
-                val core = inkWithin(luminance, bubbleMask, bgLum, isInverted, CORE_TOLERANCE)
-                val glyph = GlyphErase.wipe(
-                    inside.mask, bubbleMask, width, height, box, radius, core.mask,
-                    clipToBoxEdge = false
-                )
-                val glyphMask = BooleanArray(count) { i ->
-                    bubbleMask[i] && (glyph.glyph[i] || (inside.mask[i] && rawBoxMask[i]))
-                }
-                val structureMask = BooleanArray(count) { i ->
-                    bubbleMask[i] && glyph.structure[i] && !rawBoxMask[i]
-                }
-                val bounds = BooleanArray(count) { i -> bubbleMask[i] && !structureMask[i] }
-                return Plan(
-                    wallInset = wallInset,
-                    interior = bubbleMask,
-                    wipe = dilate(glyphMask, bounds, width, height, radius),
-                    usedInkMask = true,
-                    glyphPixels = glyphMask.count { it },
-                    structurePixels = structureMask.count { it },
-                    glyph = glyphMask,
-                    structure = structureMask
-                )
-            } else {
-                boxMask = rawBoxMask
-            }
-        }
-
-        // Preferred: classify the ink inside the detector's box. The box is where the detector says
-        // the text is, and the classifier will not paint a pixel it did not identify as a glyph — so
-        // the box needs no shape inset from a wall in order to be safe.
+        // Wipe 1b (Commander 2026-11-17): inside the detector box, a dark
+        // connected component that does not touch the box border is text and
+        // is erased whole; a border-touching component is the bubble outline
+        // (or ink fused to it) and survives. No enclosure promotion, no fitted
+        // shape, no glyph-vs-structure shape classifier.
         val boxInk = inkWithin(luminance, boxMask, bgLum, isInverted)
         if (boxInk.count >= MIN_TEXT_PIXELS) {
             val boxCore = inkWithin(luminance, boxMask, bgLum, isInverted, CORE_TOLERANCE)
             val glyph = GlyphErase.wipe(boxInk.mask, boxMask, width, height, box, radius, boxCore.mask)
             if (glyph.glyphPixels >= MIN_TEXT_PIXELS) {
-
-                // Topology splits what connectivity cannot. The wall is contiguous with the page,
-                // so the paper it encloses cannot contain it — ink inside that enclosure, inside
-                // the detector's box, is text by construction. Promoting it can therefore only add
-                // lettering, never a stroke: the wall is not in the mask being promoted from, it
-                // keeps the protection it already had, and the halo below still stops at it.
-                val enclosed = EnclosedInterior.measure(luminance, width, height)
-                if (enclosed.found) {
-                    val inside = inkWithin(luminance, enclosed.mask, bgLum, isInverted)
-                    val extra = (0 until count).count { i ->
-                        inside.mask[i] && boxMask[i] && !glyph.glyph[i]
-                    }
-                    if (extra > 0) {
-                        val glyphMask = BooleanArray(count) { i ->
-                            glyph.glyph[i] || (inside.mask[i] && boxMask[i])
-                        }
-                        val structureMask = BooleanArray(count) { i ->
-                            glyph.structure[i] && !inside.mask[i]
-                        }
-                        val bounds = BooleanArray(count) { i -> boxMask[i] && !structureMask[i] }
-                        return Plan(
-                            wallInset = wallInset,
-                            interior = boxMask,
-                            wipe = dilate(glyphMask, bounds, width, height, radius),
-                            usedInkMask = true,
-                            glyphPixels = glyphMask.count { it },
-                            structurePixels = structureMask.count { it },
-                            glyph = glyphMask,
-                            structure = structureMask
-                        )
-                    }
-                }
                 return Plan(
                     wallInset = wallInset,
                     interior = boxMask,
@@ -263,114 +185,9 @@ object BubbleInkMask {
             }
         }
 
-        // Next: the interior the image itself encloses. It cannot contain the stroke at all, but it
-        // is still a shape around the text, so it is reached only when there was no ink to classify.
-        val enclosed = EnclosedInterior.measure(luminance, width, height)
-        if (enclosed.found) {
-            val ink = inkWithin(luminance, enclosed.mask, bgLum, isInverted)
-            if (ink.count < MIN_TEXT_PIXELS) {
-                return Plan(wallInset, enclosed.mask, BooleanArray(count), false)
-            }
-            return Plan(
-                wallInset,
-                enclosed.mask,
-                dilate(ink.mask, enclosed.mask, width, height, radius),
-                true
-            )
-        }
-
-        // Last resort, unchanged from what shipped: the fitted shape in the detector's own box. It
-        // is still a guess — the inset is floored when no stroke was found — so it is reached only
-        // when the ink itself gave the classifier nothing to work with, and never in preference to
-        // a classification that succeeded.
-        //
-        // A guess is only as good as whatever can be held against it, and this is the one path with
-        // nothing: the wall did not close, so no enclosure says where the bubble ends, and reaching
-        // here at all means the classifier found under MIN_TEXT_PIXELS of text. Every count that
-        // could disagree with the shape is taken from the shape. So hold it against the one thing
-        // in this file that was not guessed — connectivity. Ink that runs from the region's own
-        // edge into the shape is a stroke, not lettering: a glyph is an island in paper, while a
-        // stroke leaves. The fit is therefore clipped back against that ink rather than trusted, so
-        // an oversized shape can only ever erase less. Without this, a shape that overshot its box
-        // swallowed the stroke, the swallowed ink then read as interior, and the wall census went
-        // green while the stroke was repainted — the over-wipe reported as a clean wipe.
-        val fitted = BubbleInterior.interiorMask(box.width, box.height, shape, wallInset)
-        val unbounded = borderConnectedInk(luminance, width, height, bgLum, isInverted)
-        val interior = BooleanArray(count) { i ->
-            val x = (i % width) - box.left
-            val y = (i / width) - box.top
-            x in 0 until box.width && y in 0 until box.height &&
-                fitted[y * box.width + x] && !unbounded[i]
-        }
-        val ink = inkWithin(luminance, interior, bgLum, isInverted)
-        if (ink.count < MIN_TEXT_PIXELS) {
-            return Plan(wallInset, interior, BooleanArray(count), false)
-        }
-        return Plan(wallInset, interior, dilate(ink.mask, interior, width, height, radius), true)
-    }
-
-    /**
-     * Ink that is 8-connected to the region's own edge.
-     *
-     * This is the one statement about a region that neither a shape nor the classifier can talk it
-     * out of. A glyph sits in the middle of a bubble and is an island in paper; a stroke, a tail or
-     * a piece of artwork runs from one side of the region to the other. So whatever the flood
-     * reaches from the edge is not lettering, and no fitted shape is entitled to repaint it.
-     *
-     * Seeded from the edge pixels only, so it needs no threshold beyond the ink test the rest of
-     * this file already uses, and it never consults the shape — which is the point: it is the one
-     * check that a shape which overshot cannot satisfy by construction.
-     */
-    private fun borderConnectedInk(
-        luminance: FloatArray,
-        width: Int,
-        height: Int,
-        bgLum: Float,
-        isInverted: Boolean
-    ): BooleanArray {
-        val mask = BooleanArray(luminance.size)
-        val queue = ArrayDeque<Int>()
-
-        fun isInk(i: Int): Boolean = if (isInverted) {
-            luminance[i] > bgLum + INK_TOLERANCE
-        } else {
-            luminance[i] < bgLum - INK_TOLERANCE
-        }
-
-        fun seed(i: Int) {
-            if (!mask[i] && isInk(i)) {
-                mask[i] = true
-                queue.addLast(i)
-            }
-        }
-
-        for (x in 0 until width) {
-            seed(x)
-            seed((height - 1) * width + x)
-        }
-        for (y in 0 until height) {
-            seed(y * width)
-            seed(y * width + width - 1)
-        }
-
-        while (queue.isNotEmpty()) {
-            val i = queue.removeFirst()
-            val x = i % width
-            val y = i / width
-            for (dy in -1..1) {
-                for (dx in -1..1) {
-                    val nx = x + dx
-                    val ny = y + dy
-                    if (nx !in 0 until width || ny !in 0 until height) continue
-                    val n = ny * width + nx
-                    if (!mask[n] && isInk(n)) {
-                        mask[n] = true
-                        queue.addLast(n)
-                    }
-                }
-            }
-        }
-        return mask
+        // No floating ink to erase: repaint nothing. There is no flat fill and
+        // no fitted-shape guess to fall back to.
+        return Plan(wallInset, boxMask, BooleanArray(count), false)
     }
 
     /** Repaint every set pixel of [mask] with [fillColor]. */
@@ -381,8 +198,53 @@ object BubbleInkMask {
     }
 
     /**
-     * The flat colour of the region's interior, used as both the ink reference and the repaint
-     * fill. Sampled 12% in from the edges so the stroke is never picked up, and limited to bright
+     * Repaint [wipe] pixels with the colour of their nearest surviving
+     * (non-wipe) neighbour, multi-source flood. The colour under the glyph
+     * continues across it — hair under a glyph stays hair-coloured, paper
+     * stays paper — instead of one sampled flat fill. If every pixel is
+     * wipe, [fallback] is used.
+     */
+    fun repaintNearest(
+        pixels: IntArray,
+        width: Int,
+        height: Int,
+        wipe: BooleanArray,
+        fallback: Int
+    ) {
+        val count = width * height
+        val source = IntArray(count)
+        val filled = BooleanArray(count)
+        val queue = IntArray(count)
+        var head = 0
+        var tail = 0
+        for (i in 0 until count) {
+            if (!wipe[i]) {
+                source[i] = pixels[i]
+                filled[i] = true
+                queue[tail++] = i
+            }
+        }
+        if (tail == 0) {
+            for (i in 0 until count) if (wipe[i]) pixels[i] = fallback
+            return
+        }
+        while (head < tail) {
+            val p = queue[head++]
+            val px = p % width
+            val py = p / width
+            if (px > 0 && !filled[p - 1]) { filled[p - 1] = true; source[p - 1] = source[p]; queue[tail++] = p - 1 }
+            if (px < width - 1 && !filled[p + 1]) { filled[p + 1] = true; source[p + 1] = source[p]; queue[tail++] = p + 1 }
+            if (py > 0 && !filled[p - width]) { filled[p - width] = true; source[p - width] = source[p]; queue[tail++] = p - width }
+            if (py < height - 1 && !filled[p + width]) { filled[p + width] = true; source[p + width] = source[p]; queue[tail++] = p + width }
+        }
+        for (i in 0 until count) if (wipe[i]) pixels[i] = source[i]
+    }
+
+    /**
+     * The flat colour of the region's interior, used only as the ink reference
+     * (what counts as dark against the paper). It is never the repaint fill:
+     * wiped pixels take their nearest surviving colour via [repaintNearest].
+     * Sampled in from the edges so the stroke is never picked up, and limited to bright
      * pixels so the text is never picked up either.
      */
     fun sampleInteriorColor(

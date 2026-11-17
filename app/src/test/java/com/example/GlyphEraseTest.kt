@@ -8,11 +8,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Contract for the glyph-layer erase.
+ * Contract for the wipe-1b erase.
  *
- * The classification exists so that a bubble whose wall cannot be measured can still be wiped
- * without a guess. These cases pin the two populations apart: compact ink goes, anything attached to
- * the box edge, spanning the box, or drawn as a long hairline stays.
+ * Inside a bubble there is no shape judgement: a dark component that floats
+ * (does not touch the box border) is text and is erased whole, whatever its
+ * extent or fill; a component that touches the border is the outline and
+ * stays. These cases pin that single rule.
  */
 class GlyphEraseTest {
 
@@ -105,18 +106,36 @@ class GlyphEraseTest {
     }
 
     @Test
-    fun `keeps a long thin stroke that lies inside the box`() {
+    fun `a floating component is erased whole however long and thin it is`() {
+        // Wipe 1b: no extent or hairline rule protects a floating component.
+        // A long thin stroke floating inside the box is erased whole, like
+        // any glyph; only border-touching ink survives.
         val ink = blank().also { m ->
-            for (i in 0 until 30) paint(m, 15 + i, 15 + i, 16 + i, 16 + i) // one-pixel diagonal
+            for (i in 0 until 30) paint(m, 15 + i, 15 + i, 16 + i, 16 + i) // one-pixel diagonal, floating
             paint(m, 20, 44, 26, 50)
         }
 
         val result = run(ink)
 
-        assertEquals("the hairlines are not text", 36, result.glyphPixels)
-        assertEquals("the stroke spans the box, so it is structure", 30, result.structurePixels)
-        assertFalse("a point on the stroke is untouched", result.wipe[30 * size + 30])
+        assertEquals("both floating components are text", 66, result.glyphPixels)
+        assertEquals("nothing floats and survives", 0, result.structurePixels)
+        assertTrue("a point on the floating stroke is wiped", result.wipe[30 * size + 30])
         assertTrue("the glyph is wiped", result.wipe[47 * size + 23])
+    }
+
+    @Test
+    fun `a floating component is erased whole while a border-touching one survives`() {
+        val ink = blank().also {
+            paint(it, 0, 10, 4, 40) // touches the left border: outline-side ink
+            paint(it, 24, 18, 30, 42) // tall floating bar: text under the old extent rule
+        }
+
+        val result = run(ink)
+
+        assertEquals("the floating bar is erased whole", 24 * 6, result.glyphPixels)
+        assertEquals("the border-touching bar survives whole", 30 * 4, result.structurePixels)
+        assertTrue("floating bar centre is wiped", result.wipe[30 * size + 27])
+        assertEquals("no wipe pixel lands on the border-touching bar", 0, wipedIn(result.wipe, 0, 10, 4, 40))
     }
 
     @Test

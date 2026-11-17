@@ -26,23 +26,9 @@ object FlatWiper {
         val bmpHeight = sourceBitmap.height
         val densityScale = max(1.0f, max(bmpWidth, bmpHeight) / 1000f)
 
-        // One full-page enclosure measurement per page, taken from the *source* so the glyphs it
-        // reads are the ones the detector saw. The map is the authority on where each bubble's
-        // interior really is — including lobes of a merged balloon that lie outside the detector's
-        // rectangle — and is what lets the plan below wipe past a tight box without ever crossing
-        // a wall. Measured once here rather than per bubble: the flood is page-wide by design,
-        // because a bubble's extent is a property of the page, not of any box.
-        val pagePixels = IntArray(bmpWidth * bmpHeight)
-        sourceBitmap.getPixels(pagePixels, 0, bmpWidth, 0, 0, bmpWidth, bmpHeight)
-        val pageLuminance = FloatArray(pagePixels.size) { BubbleInterior.luminance(pagePixels[it]) }
-        val enclosureMap = EnclosureMap.build(pageLuminance, bmpWidth, bmpHeight)
-        // A balloon clipped by the page edge has no wall on that side in the image, so the
-        // border flood drains its interior and the plain map measures no enclosure for it —
-        // the glyph classifier then protects most of its lettering as "structure" and the
-        // Japanese survives (page-6 top bubbles, BACKLOG:711). The sealed map treats the
-        // page edge as the closing wall. Built lazily, consulted only for a box that
-        // touches the page edge and found no enclosure in the plain map.
-        val sealedEnclosureMap by lazy { EnclosureMap.build(pageLuminance, bmpWidth, bmpHeight, sealPageEdges = true) }
+        // Box-only wipe (wipe-reset, Commander 2026-11-16): no enclosure geometry
+        // feeds the wipe. EnclosureMap still serves BubbleTextMerger upstream in
+        // PagePipeline; the wipe's repaint region is the detector box, full stop.
 
         for (bubble in bubbles) {
             if (!bubble.visible) continue
@@ -54,15 +40,13 @@ object FlatWiper {
             // Free text (detector text_free, BACKLOG:13): there is no balloon wall
             // or measured enclosure to wipe within, so the wipe extent is the
             // Japanese text block's own box and nothing beyond it. The wipe follows
-            // the glyphs, not the rectangle (Commander, 2026-11-15): only ink the
-            // classifier identifies as lettering is repainted, so artwork inside
-            // the extent — a character's head crossing the block — survives. The
-            // repaint colour comes from each glyph pixel's own surroundings, not
-            // one flat fill: free text sits on artwork, and a flat bright fill
-            // leaves the glyph shapes standing as ghosts on anything darker. The
-            // rectangle fill remains only as the last resort when no lettering
-            // could be classified at all, because unwiped Japanese counts as not
-            // rendered. The typesetter writes the English back into the same extent.
+            // the glyphs, not the rectangle: only floating ink components are
+            // repainted, so artwork inside the extent survives. The repaint
+            // colour comes from each glyph pixel's nearest surviving
+            // neighbour, not one flat fill: free text sits on artwork, and a
+            // flat bright fill leaves the glyph shapes standing as ghosts on
+            // anything darker. The typesetter writes the English back into
+            // the same extent.
             if (bubble.type.equals("floating", ignoreCase = true)) {
                 val fLeft = (bubble.x1 * bmpWidth).toInt().coerceIn(0, bmpWidth - 1)
                 val fTop = (bubble.y1 * bmpHeight).toInt().coerceIn(0, bmpHeight - 1)
@@ -77,14 +61,14 @@ object FlatWiper {
                     val plan = BubbleInkMask.plan(
                         boxPixels, fW, fH, fill,
                         BubbleInterior.Shape.RECT, densityScale,
-                        BubbleInkMask.BoxFrame(0, 0, fW, fH, 0), null
+                        BubbleInkMask.BoxFrame(0, 0, fW, fH, 0)
                     )
                     if (plan.usedInkMask) {
-                        repaintFromSurroundings(boxPixels, fW, fH, plan.wipe, fill)
+                        BubbleInkMask.repaintNearest(boxPixels, fW, fH, plan.wipe, fill)
                         resultBitmap.setPixels(boxPixels, 0, fW, fLeft, fTop, fW, fH)
-                    } else {
-                        resultBitmap.setPixels(IntArray(fW * fH) { fill }, 0, fW, fLeft, fTop, fW, fH)
                     }
+                    // No floating ink classified: repaint nothing. No flat
+                    // rectangle fill remains to fall back to.
                 }
                 continue
             }
@@ -112,133 +96,27 @@ object FlatWiper {
                 boxH
             )
 
-            // A walled bubble is measured over a margin-widened region. A detection box is tight by
-            // construction, so the stroke is frequently clipped by its own edge and can no longer be
-            // recognised as a wall that closes. The widening is for that measurement alone: the fill
-            // colour and the wall-inset estimate above are taken from the detector's own box, and the
-            // plan's frame below is still that box, so a widened measurement can never widen the
-            // region that gets repainted.
-            val margin = EnclosedInterior.measurementMargin(boxW, boxH)
-            val regionLeft = (leftPx - margin).coerceAtLeast(0)
-            val regionTop = (topPx - margin).coerceAtLeast(0)
-            val regionRight = (rightPx + margin).coerceAtMost(bmpWidth)
-            val regionBottom = (bottomPx + margin).coerceAtMost(bmpHeight)
-            val regionW = regionRight - regionLeft
-            val regionH = regionBottom - regionTop
-
-            val pixels = IntArray(regionW * regionH)
-            resultBitmap.getPixels(pixels, 0, regionW, regionLeft, regionTop, regionW, regionH)
-
-            // The enclosure that owns this box, if any, lifted into region coordinates. Supplied as
-            // the plan's measured interior: ink inside it is text by construction, so the wipe may
-            // reach past the detector's rectangle — but never past this mask, which ends at the
-            // wall. A box that mostly sits on artwork or in a neighbouring bubble adopts nothing, and
-            // the plan then falls back to the interior it measures for itself — never to the box, and
-            // never to a fitted shape, so nothing outside a measured interior can be repainted.
-            // The mask below indexes the id grid of the map that produced the
-            // enclosure — the sealed and plain maps number their components
-            // independently, so an id from one means a different component in
-            // the other. The lookup therefore returns its map alongside.
-            val found: Pair<EnclosureMap.Enclosure, EnclosureMap>? =
-                enclosureMap.findEnclosureForBox(listOf(bubble.x1, bubble.y1, bubble.x2, bubble.y2))
-                    ?.let { it to enclosureMap }
-                    ?: run {
-                        val touchesEdge = bubble.x1 <= 0.02f || bubble.y1 <= 0.02f ||
-                            bubble.x2 >= 0.98f || bubble.y2 >= 0.98f
-                        if (touchesEdge) sealedEnclosureMap.findEnclosureForBox(
-                            listOf(bubble.x1, bubble.y1, bubble.x2, bubble.y2)
-                        )?.let { it to sealedEnclosureMap } else null
-                    }
-            val enclosure = found?.first
-            val enclosureSource = found?.second
-            val isSealedEnclosure = enclosureSource != null && enclosureSource !== enclosureMap
-            val bubbleMask: BooleanArray? = if (enclosure != null && enclosureSource != null) {
-                BooleanArray(regionW * regionH) { i ->
-                    val gx = (i % regionW) + regionLeft
-                    val gy = (i / regionW) + regionTop
-                    val inBox = gx in leftPx until rightPx && gy in topPx until bottomPx
-                    if (isSealedEnclosure && !inBox) {
-                        false
-                    } else {
-                        val id = enclosureSource.enclosureIds[gy * bmpWidth + gx]
-                        id == enclosure.id
-                    }
-                }
-            } else null
-
             val plan = BubbleInkMask.plan(
-                pixels,
-                regionW,
-                regionH,
+                boxPixels,
+                boxW,
+                boxH,
                 sampledColor,
                 shape,
                 densityScale,
-                BubbleInkMask.BoxFrame(
-                    left = leftPx - regionLeft,
-                    top = topPx - regionTop,
-                    width = boxW,
-                    height = boxH,
-                    inset = boxInset
-                ),
-                bubbleMask
+                BubbleInkMask.BoxFrame(0, 0, boxW, boxH, inset = boxInset)
             )
 
-            // Either the plan classified lettering and returns the pixels to repaint (`wipe`), or it
-            // found nothing readable and returns the interior it measured instead (`interior`) so
-            // that half-erased lettering is still cleared.
-            //
-            // The second case used to paint a *fitted oval over the whole detector box*, throwing
-            // away the mask the plan had just measured. A box is routinely larger than the balloon
-            // it belongs to and can straddle artwork, so that oval reached past the wall and erased
-            // the effects and line art around it. A measured interior cannot do that: it is the
-            // region the image itself closes, and it ends at the stroke by construction.
-            BubbleInkMask.apply(pixels, if (plan.usedInkMask) plan.wipe else plan.interior, sampledColor)
-            resultBitmap.setPixels(pixels, 0, regionW, regionLeft, regionTop, regionW, regionH)
+            // Wipe 1b: repaint only the floating components the plan erased,
+            // each pixel with its nearest surviving colour. Border-touching
+            // ink (the outline) is not in the wipe mask and survives. When no
+            // floating ink was found the box is left exactly as drawn — there
+            // is no sampled flat fill and no fitted-shape interior fallback.
+            if (plan.usedInkMask) {
+                BubbleInkMask.repaintNearest(boxPixels, boxW, boxH, plan.wipe, sampledColor)
+                resultBitmap.setPixels(boxPixels, 0, boxW, leftPx, topPx, boxW, boxH)
+            }
         }
 
         resultBitmap
-    }
-
-    /**
-     * Repaint [wipe] pixels with the colour of their nearest non-wipe neighbour
-     * (multi-source flood). Artwork tones continue across the glyph instead of a
-     * flat fill, so the lettering leaves no ghost on art while the art itself —
-     * which the classifier protected as structure — stays untouched. If every
-     * pixel is wipe, [fallback] is used.
-     */
-    private fun repaintFromSurroundings(
-        pixels: IntArray,
-        width: Int,
-        height: Int,
-        wipe: BooleanArray,
-        fallback: Int
-    ) {
-        val count = width * height
-        val source = IntArray(count)
-        val filled = BooleanArray(count)
-        val queue = IntArray(count)
-        var head = 0
-        var tail = 0
-        for (i in 0 until count) {
-            if (!wipe[i]) {
-                source[i] = pixels[i]
-                filled[i] = true
-                queue[tail++] = i
-            }
-        }
-        if (tail == 0) {
-            for (i in 0 until count) if (wipe[i]) pixels[i] = fallback
-            return
-        }
-        while (head < tail) {
-            val p = queue[head++]
-            val px = p % width
-            val py = p / width
-            if (px > 0 && !filled[p - 1]) { filled[p - 1] = true; source[p - 1] = source[p]; queue[tail++] = p - 1 }
-            if (px < width - 1 && !filled[p + 1]) { filled[p + 1] = true; source[p + 1] = source[p]; queue[tail++] = p + 1 }
-            if (py > 0 && !filled[p - width]) { filled[p - width] = true; source[p - width] = source[p]; queue[tail++] = p - width }
-            if (py < height - 1 && !filled[p + width]) { filled[p + width] = true; source[p + width] = source[p]; queue[tail++] = p + width }
-        }
-        for (i in 0 until count) if (wipe[i]) pixels[i] = source[i]
     }
 }

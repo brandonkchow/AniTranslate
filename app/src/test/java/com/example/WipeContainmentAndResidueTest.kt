@@ -25,12 +25,6 @@ class WipeContainmentAndResidueTest {
         val pixels = IntArray(size * size) { paper }
         // Measured enclosure covers most of the region (simulating an enclosure that
         // over-extended past the bubble wall onto artwork, e.g. page-01 id 3).
-        val bubbleMask = BooleanArray(size * size) { i ->
-            val x = i % size
-            val y = i / size
-            x in 5 until 75 && y in 5 until 75
-        }
-
         // Compact glyph inside the box (x=22..28, y=22..28)
         for (y in 22 until 28) {
             for (x in 22 until 28) {
@@ -54,30 +48,19 @@ class WipeContainmentAndResidueTest {
             bgColor = paper,
             shape = BubbleInterior.Shape.ELLIPSE,
             densityScale = 1f,
-            box = box,
-            bubbleMask = bubbleMask
+            box = box
         )
 
         assertTrue("glyph inside the enclosure must be wiped", plan.wipe[25 * size + 25])
         assertFalse(
-            "structure ink inside the enclosure must NOT be wiped",
+            "structure ink outside the box must NOT be wiped",
             plan.wipe[40 * size + 61]
-        )
-        assertTrue(
-            "structure ink must be recorded as structure",
-            plan.structure[40 * size + 61]
         )
     }
 
     @Test
-    fun `structure-classified ink inside detector box is wiped while outside-box structure survives and outside-box glyph is wiped`() {
+    fun `structure-classified ink inside detector box is wiped while outside-box structure and glyph survive`() {
         val pixels = IntArray(size * size) { paper }
-        val bubbleMask = BooleanArray(size * size) { i ->
-            val x = i % size
-            val y = i / size
-            x in 5 until 75 && y in 5 until 75
-        }
-
         // Tall merged glyph column inside the detector box (x=24..28, y=18..42, height=24 > 0.45*40).
         // GlyphErase classifies this as structure due to its extent, yet it sits inside the box.
         for (y in 18 until 42) {
@@ -108,8 +91,7 @@ class WipeContainmentAndResidueTest {
             bgColor = paper,
             shape = BubbleInterior.Shape.ELLIPSE,
             densityScale = 1f,
-            box = box,
-            bubbleMask = bubbleMask
+            box = box
         )
 
         assertTrue(
@@ -120,12 +102,8 @@ class WipeContainmentAndResidueTest {
             "structure ink outside the detector box must NOT be wiped",
             plan.wipe[40 * size + 61]
         )
-        assertTrue(
-            "outside-box structure ink must be recorded as structure",
-            plan.structure[40 * size + 61]
-        )
-        assertTrue(
-            "classifier-confirmed glyph outside the detector box inside the enclosure must be wiped",
+        assertFalse(
+            "glyph outside the detector box must NOT be wiped (box-only wipe)",
             plan.wipe[22 * size + 68]
         )
     }

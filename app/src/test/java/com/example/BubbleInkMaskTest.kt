@@ -10,12 +10,10 @@ import org.junit.Test
 /**
  * Contract for wiping one region the detector drew a box around.
  *
- * A component verdict is all-or-nothing, so it has to be conservative about any blob it cannot
- * split. Japanese lettering that leans on the stroke is one 8-connected blob with the wall, the blob
- * is structure, and the lettering survives inside it — a bubble wiped on the left and still Japanese
- * on the right. These cases pin the repair: ink the wall encloses is text by construction, so it is
- * promoted out of structure, while a wall is never inside its own enclosure and keeps the protection
- * it already had.
+ * Wipe 1b: a dark component floating inside the box is text and is erased
+ * whole; a component touching the box border is the bubble outline and
+ * survives. Lettering bridged to the wall only by anti-alias fringe still
+ * separates at its dark core, so the column goes and the wall stays.
  */
 class BubbleInkMaskTest {
 
@@ -80,7 +78,9 @@ class BubbleInkMaskTest {
 
     @Test
     fun `lettering fused to the wall is text, and the wall is not`() {
-        val result = plan(bubbleWithLetteringAgainstTheWall(), frame(8, 8, 64, 64))
+        // The detector box is drawn around the bubble, so the wall touches
+        // its border (frame coincides with the ring here).
+        val result = plan(bubbleWithLetteringAgainstTheWall(), frame(20, 20, 40, 40))
 
         assertTrue(
             "the column inside the wall must be wiped: the wall was drawn around it",
@@ -108,7 +108,7 @@ class BubbleInkMaskTest {
                 intArrayOf(37, 30, 43, 50, ink),
                 intArrayOf(27, 30, 33, 42, ink)
             ),
-            frame(8, 8, 64, 64)
+            frame(20, 20, 40, 40)
         )
 
         assertTrue("a detached column is wiped", result.wipe[40 * size + 40])
@@ -158,190 +158,33 @@ class BubbleInkMaskTest {
         )
     }
 
-    /** The bubble's measured interior, as the segmenter reports it: an ellipse in region pixels. */
-    private fun ellipse(cx: Int, cy: Int, rx: Int, ry: Int) = BooleanArray(count) { i ->
-        val dx = ((i % size) - cx).toFloat() / rx
-        val dy = ((i / size) - cy).toFloat() / ry
-        dx * dx + dy * dy <= 1f
-    }
-
-    private fun planMeasured(
-        pixels: IntArray,
-        box: BubbleInkMask.BoxFrame,
-        bubbleMask: BooleanArray
-    ) = BubbleInkMask.plan(
-        pixels = pixels,
-        width = size,
-        height = size,
-        bgColor = paper,
-        shape = BubbleInterior.Shape.ELLIPSE,
-        densityScale = 1f,
-        box = box,
-        bubbleMask = bubbleMask
-    )
-
     @Test
-    fun `a measured interior bounds the wipe where the box does not`() {
-        // The detector's box is not always bounded by the bubble. An over-tall box runs past the
-        // bubble's floor and clips the artwork below it, and the classifier then reads that artwork
-        // as strokes of its own, calls it lettering, and paints it: the bubble is eaten away from
-        // the outside and redrawn at a boundary that was never the bubble's. This is the defect
-        // class the measured interior exists to end.
-        //
-        // The measurement cannot be argued with the way a shape can. It is where the bubble
-        // actually is, so nothing outside it may be repainted whatever the classifier believes, and
-        // nothing inside it may be left behind. Both halves are asserted below: the strokes the
-        // over-tall box clipped must survive, and the lettering inside the bubble must not.
+    fun `a leaking enclosure paints zero pixels outside the detector box`() {
+        // Wipe-reset falsifier (Commander 2026-11-16): an enclosure measured from
+        // the page leaks past the bubble wall onto artwork (page-01 id 3 shape).
+        // The leaking enclosure is constructed here as the area it would have
+        // covered; plan() no longer consumes any enclosure, so none of that
+        // outside-box area may be painted, while glyph ink inside the box is.
+        val leakingEnclosure = BooleanArray(count) { i ->
+            val x = i % size; val y = i / size
+            x in 5 until 75 && y in 5 until 75
+        }
         val pixels = region(
-            *ring(20, 20, 60, 50),
-            intArrayOf(30, 28, 36, 40, ink), // lettering inside the bubble
-            intArrayOf(24, 58, 56, 61, ink), // artwork the over-tall box clipped: a thin stroke,
-            intArrayOf(24, 64, 40, 67, ink) // too long and too straight to have been lettering
+            intArrayOf(22, 22, 28, 28, ink), // glyph inside the box
+            intArrayOf(60, 5, 63, 75, ink), // artwork stroke the leak would cover
+            intArrayOf(66, 20, 71, 25, ink) // glyph-shaped ink outside the box, inside the leak
         )
-        val result = planMeasured(
-            pixels = pixels,
-            box = frame(20, 20, 40, 50), // runs 20 rows past the bubble's floor
-            bubbleMask = ellipse(cx = 40, cy = 35, rx = 18, ry = 13)
-        )
-
-        assertEquals(
-            "artwork below the bubble was repainted, at a boundary the bubble never had",
-            0,
-            countIn(result.wipe, 20, 51, 60, 70)
-        )
-        assertEquals(
-            "the overrun past the bubble was reported as interior",
-            0,
-            countIn(result.interior, 20, 51, 60, 70)
-        )
-        assertTrue(
-            "lettering inside the measured bubble was left behind",
-            countIn(result.wipe, 30, 28, 36, 40) > 0
-        )
-    }
-
-    @Test
-    fun `without a measured interior the box remains the whole authority`() {
-        // The no-mask path must stay bit-identical to what shipped: everything the box encloses is
-        // still the authority, including the overrun. This pins that the mask is additive and that
-        // the previous behaviour was not quietly narrowed for callers that have no segmenter.
-        val pixels = region(
-            *ring(20, 20, 60, 50),
-            intArrayOf(30, 28, 36, 40, ink)
-        )
-        val result = plan(pixels, frame(20, 20, 40, 50))
-
-        // Every pixel of the box is interior, overrun included: with no measurement there is nothing
-        // else the authority could be, so this is the exact width of the path that shipped.
-        assertEquals(
-            "the box stopped being the authority when no measurement was supplied",
-            40 * 50,
-            countIn(result.interior, 20, 20, 60, 70)
-        )
-    }
-
-    @Test
-    fun `two-lobe bubble wipes ink in both lobes when interior covers both, leaving wall stroke untouched`() {
-        // Synthetic two-lobe page: two lobes joined by an open neck.
-        // A wall stroke encloses both lobes, with glyph strokes in each lobe.
-        // The detector's box covers ONLY the top lobe.
-        // plan() must wipe ink in BOTH lobes when bubbleMask covers both, leaving the wall stroke untouched.
-        val w = 80
-        val h = 80
-        val pixels = IntArray(w * h) { paper }
-        val bubbleMask = BooleanArray(w * h)
-
-        val wallPixels = mutableListOf<Int>()
-        for (y in 0 until h) {
-            for (x in 0 until w) {
-                val dTop = (x - 40) * (x - 40) + (y - 25) * (y - 25)
-                val dBottom = (x - 40) * (x - 40) + (y - 55) * (y - 55)
-                val isNeck = x in 33..47 && y in 25..55
-                val isInside = dTop <= 16 * 16 || dBottom <= 16 * 16 || isNeck
-                val isWall = (dTop in (16 * 16)..(19 * 19) || dBottom in (16 * 16)..(19 * 19) ||
-                    ((x in 30..32 || x in 48..50) && y in 25..55)) && !isInside
-
-                if (isInside) {
-                    bubbleMask[y * w + x] = true
-                } else if (isWall) {
-                    pixels[y * w + x] = ink
-                    wallPixels.add(y * w + x)
-                }
-            }
+        val result = plan(pixels, frame(10, 10, 40, 40))
+        assertTrue("glyph inside the box must be wiped", result.wipe[25 * size + 25])
+        var outside = 0
+        for (i in 0 until count) {
+            val x = i % size; val y = i / size
+            val inBox = x in 10 until 50 && y in 10 until 50
+            if (!inBox && (result.wipe[i] || result.interior[i])) outside++
+            if (leakingEnclosure[i] && !inBox && result.wipe[i]) outside++
         }
-
-        // Draw glyph strokes in top lobe (rows 22..28, cols 38..42)
-        for (y in 22..28) {
-            for (x in 38..42) pixels[y * w + x] = ink
-        }
-        // Draw glyph strokes in bottom lobe (rows 52..58, cols 38..42)
-        for (y in 52..58) {
-            for (x in 38..42) pixels[y * w + x] = ink
-        }
-
-        // The detector's box covers ONLY the top lobe
-        val box = BubbleInkMask.BoxFrame(left = 20, top = 10, width = 40, height = 30, inset = 0)
-        val result = BubbleInkMask.plan(
-            pixels = pixels,
-            width = w,
-            height = h,
-            bgColor = paper,
-            shape = BubbleInterior.Shape.ROUNDED_RECT,
-            densityScale = 1f,
-            box = box,
-            bubbleMask = bubbleMask
-        )
-
-        assertTrue("must use ink mask", result.usedInkMask)
-
-        // Ink in top lobe must be wiped
-        assertTrue("top lobe glyph must be wiped", result.wipe[25 * w + 40])
-        // Ink in bottom lobe must be wiped
-        assertTrue("bottom lobe glyph must be wiped", result.wipe[55 * w + 40])
-
-        // Wall stroke must be untouched
-        for (wp in wallPixels) {
-            assertFalse("wall stroke at pixel $wp must be left untouched", result.wipe[wp])
-        }
-
-        // Dilate bounds and wipe must never reach outside bubbleMask
-        for (i in 0 until w * h) {
-            if (!bubbleMask[i]) {
-                assertFalse("wipe must never reach outside bubbleMask at $i", result.wipe[i])
-            }
-        }
-    }
-
-    @Test
-    fun `when bubbleMask is null plan output is identical to pre-change algorithm`() {
-        val testRegions = listOf(
-            bubbleWithLetteringAgainstTheWall() to frame(8, 8, 64, 64),
-            region(*ring(20, 20, 60, 60), intArrayOf(37, 30, 43, 50, ink), intArrayOf(27, 30, 33, 42, ink)) to frame(8, 8, 64, 64),
-            region(*ring(20, 20, 60, 50), intArrayOf(30, 28, 36, 40, ink)) to frame(20, 20, 40, 50)
-        )
-
-        for ((px, box) in testRegions) {
-            val resultWithDefaultNull = plan(px, box)
-            val resultWithExplicitNull = BubbleInkMask.plan(
-                pixels = px,
-                width = size,
-                height = size,
-                bgColor = paper,
-                shape = BubbleInterior.Shape.ELLIPSE,
-                densityScale = 1f,
-                box = box,
-                bubbleMask = null
-            )
-
-            assertEquals(resultWithDefaultNull.wallInset, resultWithExplicitNull.wallInset)
-            assertEquals(resultWithDefaultNull.usedInkMask, resultWithExplicitNull.usedInkMask)
-            assertEquals(resultWithDefaultNull.glyphPixels, resultWithExplicitNull.glyphPixels)
-            assertEquals(resultWithDefaultNull.structurePixels, resultWithExplicitNull.structurePixels)
-            assertTrue(resultWithDefaultNull.wipe.contentEquals(resultWithExplicitNull.wipe))
-            assertTrue(resultWithDefaultNull.interior.contentEquals(resultWithExplicitNull.interior))
-            assertTrue(resultWithDefaultNull.glyph.contentEquals(resultWithExplicitNull.glyph))
-            assertTrue(resultWithDefaultNull.structure.contentEquals(resultWithExplicitNull.structure))
-        }
+        assertEquals("zero painted pixels outside the detector box", 0, outside)
+        assertFalse("artwork inside the leaking enclosure must survive", result.wipe[40 * size + 61])
     }
 
     @Test
@@ -372,5 +215,44 @@ class BubbleInkMaskTest {
         assertTrue("the grey bridge between glyphs is wiped with them", result.glyph[16 * size + 40])
         assertFalse("the artwork block is not wiped", result.wipe[43 * size + 37])
         assertTrue("the artwork block is structure", result.structure[43 * size + 37])
+    }
+
+    @Test
+    fun `a glyph over a coloured field is filled in that colour, not white`() {
+        // Wipe 1b fill test: the field under the glyph is a flat colour that
+        // is not white. The wiped glyph pixels must take their nearest
+        // surviving colour — the field — never a sampled white.
+        val field = (0xFF shl 24) or (0xC8 shl 16) or (0xD8 shl 8) or 0xE8
+        val n = 40
+        val pixels = IntArray(n * n) { field }
+        for (y in 16 until 24) {
+            for (x in 16 until 24) pixels[y * n + x] = ink
+        }
+        val result = BubbleInkMask.plan(
+            pixels = pixels,
+            width = n,
+            height = n,
+            bgColor = field,
+            shape = BubbleInterior.Shape.ELLIPSE,
+            densityScale = 1f,
+            box = BubbleInkMask.BoxFrame(0, 0, n, n, inset = 0)
+        )
+        assertTrue("the floating glyph must be in the wipe mask", result.wipe[20 * n + 20])
+
+        BubbleInkMask.repaintNearest(pixels, n, n, result.wipe, paper)
+        assertEquals("glyph centre is filled with the field colour", field, pixels[20 * n + 20])
+        assertTrue("no wiped pixel was filled white", pixels.none { it == paper })
+    }
+
+    @Test
+    fun `a floating dark component is erased whole while a border-touching one survives`() {
+        val pixels = region(
+            intArrayOf(10, 30, 14, 55, ink), // touches the box's left border
+            intArrayOf(35, 25, 41, 55, ink) // tall floating bar inside the box
+        )
+        val result = plan(pixels, frame(10, 10, 50, 60))
+        assertTrue("floating bar centre is wiped", result.wipe[40 * size + 38])
+        assertFalse("border-touching bar is not wiped", result.wipe[40 * size + 12])
+        assertTrue("border-touching bar is structure", result.structure[40 * size + 12])
     }
 }
