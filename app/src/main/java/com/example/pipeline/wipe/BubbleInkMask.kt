@@ -184,12 +184,15 @@ object BubbleInkMask {
             val inside = inkWithin(luminance, bubbleMask, bgLum, isInverted)
             if (inside.count >= MIN_TEXT_PIXELS) {
                 val core = inkWithin(luminance, bubbleMask, bgLum, isInverted, CORE_TOLERANCE)
-                val glyph = GlyphErase.wipe(inside.mask, bubbleMask, width, height, box, radius, core.mask)
+                val glyph = GlyphErase.wipe(
+                    inside.mask, bubbleMask, width, height, box, radius, core.mask,
+                    clipToBoxEdge = false
+                )
                 val glyphMask = BooleanArray(count) { i ->
-                    bubbleMask[i] && (glyph.glyph[i] || inside.mask[i])
+                    bubbleMask[i] && glyph.glyph[i]
                 }
                 val structureMask = BooleanArray(count) { i ->
-                    bubbleMask[i] && glyph.structure[i] && !inside.mask[i]
+                    bubbleMask[i] && glyph.structure[i]
                 }
                 val bounds = BooleanArray(count) { i -> bubbleMask[i] && !structureMask[i] }
                 return Plan(
@@ -390,30 +393,23 @@ object BubbleInkMask {
     ): Int {
         if (width <= 0 || height <= 0) return fallback
 
-        val insetX = ((width) * 0.12f).toInt().coerceAtLeast(2)
-        val insetY = ((height) * 0.12f).toInt().coerceAtLeast(2)
+        val gridSteps = 7
+        val rValues = ArrayList<Int>(gridSteps * gridSteps)
+        val gValues = ArrayList<Int>(gridSteps * gridSteps)
+        val bValues = ArrayList<Int>(gridSteps * gridSteps)
 
-        val samples = listOf(
-            insetX to insetY,
-            (width - insetX) to insetY,
-            insetX to (height - insetY),
-            (width - insetX) to (height - insetY),
-            insetX to (height / 2),
-            (width - insetX) to (height / 2)
-        )
-
-        val rValues = ArrayList<Int>(samples.size)
-        val gValues = ArrayList<Int>(samples.size)
-        val bValues = ArrayList<Int>(samples.size)
-
-        for ((x, y) in samples) {
-            val cx = x.coerceIn(0, width - 1)
-            val cy = y.coerceIn(0, height - 1)
-            val pixel = pixels[cy * width + cx]
-            if (BubbleInterior.luminance(pixel) >= 0.65f) {
-                rValues.add((pixel shr 16) and 0xFF)
-                gValues.add((pixel shr 8) and 0xFF)
-                bValues.add(pixel and 0xFF)
+        for (gy in 0 until gridSteps) {
+            val fy = 0.15f + 0.70f * (gy.toFloat() / (gridSteps - 1))
+            val cy = (fy * (height - 1)).toInt().coerceIn(0, height - 1)
+            for (gx in 0 until gridSteps) {
+                val fx = 0.15f + 0.70f * (gx.toFloat() / (gridSteps - 1))
+                val cx = (fx * (width - 1)).toInt().coerceIn(0, width - 1)
+                val pixel = pixels[cy * width + cx]
+                if (BubbleInterior.luminance(pixel) >= 0.65f) {
+                    rValues.add((pixel shr 16) and 0xFF)
+                    gValues.add((pixel shr 8) and 0xFF)
+                    bValues.add(pixel and 0xFF)
+                }
             }
         }
 
@@ -422,8 +418,8 @@ object BubbleInkMask {
         rValues.sort()
         gValues.sort()
         bValues.sort()
-        val mid = rValues.size / 2
-        return (0xFF shl 24) or (rValues[mid] shl 16) or (gValues[mid] shl 8) or bValues[mid]
+        val p75 = ((rValues.size * 3) / 4).coerceIn(0, rValues.size - 1)
+        return (0xFF shl 24) or (rValues[p75] shl 16) or (gValues[p75] shl 8) or bValues[p75]
     }
 
     /** Square-kernel dilation of [seed], clipped to [bounds]. */

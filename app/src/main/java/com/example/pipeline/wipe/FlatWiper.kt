@@ -151,12 +151,18 @@ object FlatWiper {
                     }
             val enclosure = found?.first
             val enclosureSource = found?.second
+            val isSealedEnclosure = enclosureSource != null && enclosureSource !== enclosureMap
             val bubbleMask: BooleanArray? = if (enclosure != null && enclosureSource != null) {
                 BooleanArray(regionW * regionH) { i ->
                     val gx = (i % regionW) + regionLeft
                     val gy = (i / regionW) + regionTop
-                    val id = enclosureSource.enclosureIds[gy * bmpWidth + gx]
-                    id == enclosure.id
+                    val inBox = gx in leftPx until rightPx && gy in topPx until bottomPx
+                    if (isSealedEnclosure && !inBox) {
+                        false
+                    } else {
+                        val id = enclosureSource.enclosureIds[gy * bmpWidth + gx]
+                        id == enclosure.id
+                    }
                 }
             } else null
 

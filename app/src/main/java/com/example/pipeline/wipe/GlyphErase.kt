@@ -94,7 +94,8 @@ object GlyphErase {
         height: Int,
         box: BubbleInkMask.BoxFrame,
         dilationRadius: Int,
-        coreInk: BooleanArray? = null
+        coreInk: BooleanArray? = null,
+        clipToBoxEdge: Boolean = true
     ): Result {
         val count = width * height
         require(count > 0) { "region must not be empty" }
@@ -109,6 +110,9 @@ object GlyphErase {
         val hairlineExtent = HAIRLINE_EXTENT * shortSide
 
         fun touchesBoxEdge(x: Int, y: Int): Boolean {
+            if (!clipToBoxEdge) {
+                return x <= 0 || y <= 0 || x >= width - 1 || y >= height - 1
+            }
             val bx = x - box.left
             val by = y - box.top
             return bx <= 0 || by <= 0 || bx >= box.width - 1 || by >= box.height - 1
