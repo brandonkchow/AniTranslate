@@ -44,14 +44,13 @@ object GlyphErase {
     /**
      * Width of the box's outer band, as a fraction of the box's smaller side,
      * inside which a floating component is outline, not text. Measured on
-     * page-08 id1, the corner outline components sit at box-edge distance up
-     * to 0.06 of the smaller side while every glyph in the five measured
-     * units (page-08 id1/id10, page-07 id3, page-01 id3, page-10 id10) sits
-     * at 0.11 or more, and the tight-bubble unit fixtures place lettering at
-     * 0.075 — 0.06 is the widest band that protects the measured corner
-     * spokes without reaching any measured glyph.
+     * page-08 id1: the corner outline components reach box-edge distance
+     * 0.17 of the smaller side, while that bubble's glyphs sit at 0.29 or
+     * more. The same band reaches glyphs in tighter bubbles — page-01 id3
+     * lettering sits at 0.11 — so this width is the Commander-gated
+     * candidate judged on the fixed five-crop set, not a settled constant.
      */
-    private const val PERIMETER_RING_FRACTION = 0.06
+    private const val PERIMETER_RING_FRACTION = 0.17
 
     /**
      * @param wipe pixels to repaint: the floating components plus a clipped halo.
