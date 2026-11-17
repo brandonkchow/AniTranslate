@@ -46,6 +46,53 @@ object Typesetter {
         val outcomes: Map<Int, LayoutOutcome>
     )
 
+    /**
+     * Deliberate shout detection: a balloon (not floating/non-balloon) is a shout
+     * when it carries shout punctuation (`!`, `！`, `――`, `--`) in either the
+     * English or Japanese text AND is a compact utterance (`<= 25` chars).
+     * Long multi-clause sentences with `!` (e.g. 30–67 char conversational lines)
+     * remain normal speech so they are neither uppercased nor forced onto the
+     * shout size floor.
+     */
+    internal fun isShoutBubble(bubble: Bubble, rawText: String): Boolean {
+        if (bubble.isNonBalloon || bubble.type.equals("floating", ignoreCase = true)) return false
+        if (rawText.length > 25) return false
+        return hasShoutPunctuation(rawText) || hasShoutPunctuation(bubble.text)
+    }
+
+    private fun hasShoutPunctuation(s: String): Boolean =
+        s.contains("!") || s.contains("！") || s.contains("――") || s.contains("--")
+
+    private fun medianOf(values: List<Float>): Float {
+        if (values.isEmpty()) return 0f
+        val sorted = values.sorted()
+        val mid = sorted.size / 2
+        return if (sorted.size % 2 == 1) sorted[mid] else (sorted[mid - 1] + sorted[mid]) / 2f
+    }
+
+    private data class PreparedBubble(
+        val bubble: Bubble,
+        val leftPx: Float,
+        val topPx: Float,
+        val rightPx: Float,
+        val bottomPx: Float,
+        val boxWidth: Float,
+        val boxHeight: Float,
+        val aspectRatio: Float,
+        val isFloating: Boolean,
+        val isShout: Boolean,
+        val text: String,
+        val availableWidth: Int,
+        val availableHeight: Float,
+        val grownWidth: Int,
+        val grownHeight: Float,
+        val maxLines: Int,
+        val baseSizePx: Float,
+        val preferredSizePx: Float,
+        val minReadablePx: Float,
+        var choice: LayoutChoice? = null
+    )
+
     suspend fun typesetBubbles(
         context: Context,
         wipedBitmap: Bitmap,
@@ -60,6 +107,7 @@ object Typesetter {
         val bmpH = wipedBitmap.height
         val densityScale = max(1.0f, max(bmpW, bmpH) / 1000f)
 
+        val prepared = mutableListOf<PreparedBubble>()
         for (bubble in bubbles) {
             if (!bubble.visible) continue
 
@@ -79,9 +127,8 @@ object Typesetter {
             val boxHeight = (bottomPx - topPx).coerceAtLeast(24f)
             val aspectRatio = boxWidth / boxHeight
 
-            // Detect Shout / SFX emphasis (exclamation marks, scream dashes, uppercase)
-            val isShout = rawText.contains("!") || rawText.contains("！") || rawText.contains("――") || rawText.contains("--")
-            val text = if (isShout && rawText.length <= 25 && !rawText.all { it.isUpperCase() }) {
+            val isShout = isShoutBubble(bubble, rawText)
+            val text = if (isShout && !rawText.all { it.isUpperCase() }) {
                 rawText.uppercase()
             } else {
                 rawText
@@ -122,39 +169,92 @@ object Typesetter {
             val grownHeight = if (isFloating) (boxHeight - 4f * densityScale).coerceAtLeast(availableHeight)
                 else (boxHeight * 0.90f).coerceAtLeast(availableHeight)
 
-            // One word-break decision per unit, in professional lettering order:
-            // whole-word search in the available box ("shrink"), with fit
-            // restored by SpaceAwareRetry rewording before hyphenation; then
-            // hyphenate at a syllable ("hyphenate") and floor-resort only as
-            // last resorts. Every layout drawn below is built from this choice.
-            val choice = calculateBestLayout(
+            prepared += PreparedBubble(
+                bubble = bubble,
+                leftPx = leftPx,
+                topPx = topPx,
+                rightPx = rightPx,
+                bottomPx = bottomPx,
+                boxWidth = boxWidth,
+                boxHeight = boxHeight,
+                aspectRatio = aspectRatio,
+                isFloating = isFloating,
+                isShout = isShout,
                 text = text,
                 availableWidth = availableWidth,
                 availableHeight = availableHeight,
                 grownWidth = grownWidth,
                 grownHeight = grownHeight,
-                maxSizePx = baseSizePx * 1.30f,
-                minSizePx = minReadablePx,
-                typeface = typeface,
                 maxLines = maxLines,
-                isShout = isShout
+                baseSizePx = baseSizePx,
+                preferredSizePx = preferredSizePx,
+                minReadablePx = minReadablePx
             )
+        }
+
+        // Pass 1: Lay out all non-shout units to measure the page's median English speech size.
+        val calmSpeechSizes = mutableListOf<Float>()
+        for (p in prepared) {
+            if (p.isShout) continue
+            val choice = calculateBestLayout(
+                text = p.text,
+                availableWidth = p.availableWidth,
+                availableHeight = p.availableHeight,
+                grownWidth = p.grownWidth,
+                grownHeight = p.grownHeight,
+                maxSizePx = p.baseSizePx * 1.30f,
+                minSizePx = p.minReadablePx,
+                typeface = typeface,
+                maxLines = p.maxLines,
+                isShout = false
+            )
+            p.choice = choice
+            if (!p.isFloating) {
+                calmSpeechSizes += choice.paint.textSize
+            }
+        }
+        val pageMedianSpeechPx = medianOf(calmSpeechSizes)
+
+        // Pass 2: Lay out shout bubbles with a size floor at the page's median English speech size.
+        for (p in prepared) {
+            if (!p.isShout) continue
+            val shoutFloorPx = max(p.minReadablePx, pageMedianSpeechPx)
+            val shoutMaxPx = max(p.baseSizePx * 1.30f, pageMedianSpeechPx * 1.25f)
+            p.choice = calculateBestLayout(
+                text = p.text,
+                availableWidth = p.availableWidth,
+                availableHeight = p.availableHeight,
+                grownWidth = p.grownWidth,
+                grownHeight = p.grownHeight,
+                maxSizePx = shoutMaxPx,
+                minSizePx = shoutFloorPx,
+                typeface = typeface,
+                maxLines = p.maxLines,
+                isShout = true,
+                narrowBubble = p.aspectRatio < 0.7f,
+                fallbackMinSizePx = p.minReadablePx
+            )
+        }
+
+        for (p in prepared) {
+            val bubble = p.bubble
+            val choice = p.choice ?: continue
             val optimalLayout = choice.layout
             val optimalPaint = choice.paint
             val layoutWidthUsed = choice.widthPx
             onLayoutDecided?.invoke(
-                bubble.id, bubble.type, text, choice.lines, choice.hyphenated,
+                bubble.id, bubble.type, p.text, choice.lines, choice.hyphenated,
                 choice.paint.textSize, choice.phase, choice.lines.size,
-                occupancyOf(choice, grownWidth, grownHeight)
+                occupancyOf(choice, p.grownWidth, p.grownHeight)
             )
             outcomes[bubble.id] = LayoutOutcome(
                 bubbleId = bubble.id,
                 phase = choice.phase,
                 hyphenated = choice.hyphenated,
                 fontSizePx = choice.paint.textSize,
-                preferredSizePx = preferredSizePx,
-                minReadablePx = minReadablePx,
-                clipped = optimalLayout.height > grownHeight || optimalLayout.width > grownWidth
+                preferredSizePx = p.preferredSizePx,
+                minReadablePx = p.minReadablePx,
+                clipped = optimalLayout.height > p.grownHeight || optimalLayout.width > p.grownWidth
             )
 
             // Dual-Pass Rendering:
@@ -184,19 +284,19 @@ object Typesetter {
             // Render check (BACKLOG:13): flag any layout that could not be fitted
             // inside its extent even at the minimum size, then clip the draw to
             // the extent so no glyph is ever painted outside it.
-            if (optimalLayout.height > grownHeight || optimalLayout.width > grownWidth) {
+            if (optimalLayout.height > p.grownHeight || optimalLayout.width > p.grownWidth) {
                 android.util.Log.w(
                     "Typesetter",
                     "bubble #${bubble.id} type=${bubble.type} does not fit its extent: " +
-                        "layout ${optimalLayout.width}x${optimalLayout.height} > available ${grownWidth}x${grownHeight.toInt()} — clipped to extent"
+                        "layout ${optimalLayout.width}x${optimalLayout.height} > available ${p.grownWidth}x${p.grownHeight.toInt()} — clipped to extent"
                 )
             }
             canvas.save()
-            canvas.clipRect(leftPx, topPx, rightPx, bottomPx)
+            canvas.clipRect(p.leftPx, p.topPx, p.rightPx, p.bottomPx)
             val textLayoutHeight = optimalLayout.height.toFloat()
             val textLayoutWidth = optimalLayout.width.toFloat()
-            val drawX = leftPx + (boxWidth - textLayoutWidth) / 2f
-            val drawY = topPx + (boxHeight - textLayoutHeight) / 2f
+            val drawX = p.leftPx + (p.boxWidth - textLayoutWidth) / 2f
+            val drawY = p.topPx + (p.boxHeight - textLayoutHeight) / 2f
 
             canvas.translate(drawX, drawY)
             strokeLayout.draw(canvas)
@@ -271,12 +371,19 @@ object Typesetter {
         maxLines: Int,
         isShout: Boolean,
         hyphenate: Boolean,
-        phase: String
+        phase: String,
+        stackWords: Boolean = false
     ): LayoutChoice? {
+        val targetText = if (stackWords) {
+            val words = text.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+            if (words.size in 2..maxLines) words.joinToString("\n") else text
+        } else {
+            text
+        }
         fun candidate(sizePx: Float): LayoutChoice? {
             val paint = makePaint(sizePx, typeface, isShout)
             val probe = TextPaint(paint)
-            val wrap = WordWrap.wrap(text, widthPx.toFloat(), sizePx, hyphenate) { s, size ->
+            val wrap = WordWrap.wrap(targetText, widthPx.toFloat(), sizePx, hyphenate) { s, size ->
                 probe.textSize = size
                 probe.measureText(s)
             } ?: return null
@@ -308,11 +415,13 @@ object Typesetter {
     /**
      * Professional lettering order: (1) whole-word search in the available
      * box ("shrink"), with fit restored by rewording ([SpaceAwareRetry])
-     * before hyphenation when size drops below preferred; (2) hyphenated
-     * search in the available box ("hyphenate") as a last resort; (3) the
-     * existing "floor-resort" (4px, more lines) and nothing-fitted fallback
-     * under the same hyphenation rules, so a split without a hyphen is never
-     * emitted.
+     * before hyphenation when size drops below preferred; for narrow shout
+     * bubbles, stack one word per line to spend abundant height and, if the
+     * oval inset still pinches below [minSizePx] (the page median floor),
+     * widen to the 90% safe interior ([grownWidth] x [grownHeight]) before
+     * relaxing the floor or hyphenating; (2) hyphenate at a syllable
+     * ("hyphenate") as a last resort; (3) "floor-resort" (4px, more lines)
+     * and nothing-fitted fallback under the same hyphenation rules.
      */
     internal fun calculateBestLayout(
         text: String,
@@ -324,20 +433,37 @@ object Typesetter {
         minSizePx: Float,
         typeface: Typeface,
         maxLines: Int,
-        isShout: Boolean = false
+        isShout: Boolean = false,
+        narrowBubble: Boolean = false,
+        fallbackMinSizePx: Float = minSizePx
     ): LayoutChoice {
+        if (isShout && narrowBubble) {
+            searchLayout(text, availableWidth, availableHeight, maxSizePx, minSizePx, typeface, maxLines, isShout = true, hyphenate = false, phase = "shrink", stackWords = true)
+                ?.let { return it }
+            searchLayout(text, grownWidth, grownHeight, maxSizePx, minSizePx, typeface, maxLines, isShout = true, hyphenate = false, phase = "shrink", stackWords = true)
+                ?.let { return it }
+            searchLayout(text, grownWidth, grownHeight, maxSizePx, minSizePx, typeface, maxLines, isShout = true, hyphenate = false, phase = "shrink", stackWords = false)
+                ?.let { return it }
+            searchLayout(text, grownWidth, grownHeight, minSizePx, fallbackMinSizePx, typeface, maxLines, isShout = true, hyphenate = false, phase = "shrink", stackWords = true)
+                ?.let { return it }
+        }
         searchLayout(text, availableWidth, availableHeight, maxSizePx, minSizePx, typeface, maxLines, isShout, hyphenate = false, phase = "shrink")
             ?.let { return it }
-        searchLayout(text, availableWidth, availableHeight, maxSizePx, minSizePx, typeface, maxLines, isShout, hyphenate = true, phase = "hyphenate")
+        if (fallbackMinSizePx < minSizePx) {
+            searchLayout(text, availableWidth, availableHeight, minSizePx, fallbackMinSizePx, typeface, maxLines, isShout, hyphenate = false, phase = "shrink")
+                ?.let { return it }
+        }
+        val effectiveMin = min(minSizePx, fallbackMinSizePx)
+        searchLayout(text, availableWidth, availableHeight, maxSizePx, effectiveMin, typeface, maxLines, isShout, hyphenate = true, phase = "hyphenate")
             ?.let { return it }
-        searchLayout(text, grownWidth, grownHeight, minSizePx, 4f, typeface, maxLines * 3, isShout, hyphenate = true, phase = "floor-resort")
+        searchLayout(text, grownWidth, grownHeight, effectiveMin, 4f, typeface, maxLines * 3, isShout, hyphenate = true, phase = "floor-resort")
             ?.let { return it }
 
         // Nothing fitted: emit the hyphenated wrap at the floor size anyway
         // (caller logs and clips to the extent) rather than a silent split.
-        val paint = makePaint(minSizePx, typeface, isShout)
+        val paint = makePaint(effectiveMin, typeface, isShout)
         val probe = TextPaint(paint)
-        val wrap = WordWrap.wrap(text, grownWidth.toFloat(), minSizePx, hyphenate = true) { s, size ->
+        val wrap = WordWrap.wrap(text, grownWidth.toFloat(), effectiveMin, hyphenate = true) { s, size ->
             probe.textSize = size
             probe.measureText(s)
         }
