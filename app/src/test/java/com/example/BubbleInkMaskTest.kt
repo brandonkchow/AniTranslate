@@ -87,7 +87,13 @@ class BubbleInkMaskTest {
             result.wipe[40 * size + 40]
         )
         assertTrue("the column is called text", result.glyph[40 * size + 40])
-        assertTrue("the grey bridge is called text", result.glyph[24 * size + 40])
+        // Glyph-tight seed (2026-11-18): the grey bridge is loose ink, not
+        // core, so it is no longer in the glyph mask in its own right — the
+        // unbounded loose claim through grey bridges is what repainted
+        // screentone and artwork on real pages. The halo still wipes the
+        // bridge row next to the core.
+        assertFalse("the grey bridge is not glyph seed", result.glyph[24 * size + 40])
+        assertTrue("the bridge row next to the core is wiped by the halo", result.wipe[25 * size + 40])
         assertFalse("the wall is never called text", result.glyph[21 * size + 30])
         assertTrue("the wall is still structure", result.structure[21 * size + 30])
         assertEquals(
@@ -212,7 +218,10 @@ class BubbleInkMaskTest {
         assertTrue("top glyph of the column is wiped", result.wipe[11 * size + 40])
         assertTrue("middle glyph of the column is wiped", result.wipe[21 * size + 40])
         assertTrue("bottom glyph of the column is wiped", result.wipe[31 * size + 40])
-        assertTrue("the grey bridge between glyphs is wiped with them", result.glyph[16 * size + 40])
+        // Glyph-tight seed (2026-11-18): the grey bridge is loose ink claimed
+        // by the flood, no longer glyph seed; the halo wipes its first row.
+        assertFalse("the grey bridge is not glyph seed", result.glyph[16 * size + 40])
+        assertTrue("the bridge row next to the glyph core is wiped", result.wipe[14 * size + 40])
         assertFalse("the artwork block is not wiped", result.wipe[43 * size + 37])
         assertTrue("the artwork block is structure", result.structure[43 * size + 37])
     }

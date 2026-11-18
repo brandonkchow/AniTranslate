@@ -211,7 +211,21 @@ object GlyphErase {
         var structurePixels = 0
         for (i in 0 until count) {
             when (pixelClass[i]) {
-                GLYPH -> { seed[i] = true; glyphPixels++ }
+                // Glyph-tight seed (2026-11-18): when components were labelled
+                // on core ink, only the core pixels of a floating component
+                // seed the wipe. Loose ink claimed by the flood no longer
+                // enters the seed: that claim is unbounded, and on real pages
+                // it runs through screentone and grey artwork bridges until
+                // whole non-glyph fields are repainted (measured: shipped
+                // wipe changed up to 10,430 px outside a glyph-tight mask on
+                // one unit, 29% of its outline dark pixels erased). The
+                // glyph's own anti-aliased fringe is still covered by the
+                // existing dilation halo below, clipped against structure —
+                // and structure classification above is unchanged, so the
+                // halo still cannot cross the outline. Loose pixels keep
+                // their class for that clipping; they are just not repainted
+                // in their own right.
+                GLYPH -> if (!useCore || coreInk!![i]) { seed[i] = true; glyphPixels++ }
                 STRUCTURE -> { structure[i] = true; structurePixels++ }
             }
         }
