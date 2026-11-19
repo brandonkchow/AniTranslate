@@ -53,6 +53,7 @@ class TypesetRenderProofTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
 
         val dumpLines = mutableListOf<String>()
+        val floorUnits = mutableListOf<Pair<String, Int>>()
         var totalUnits = 0
         for (page in pages) {
             val clean = File(cleanDir!!).listFiles()!!.first { it.name.startsWith(page) }
@@ -74,8 +75,10 @@ class TypesetRenderProofTest {
             Typesetter.onLayoutDecided = { id, type, decidedText, lines, hyphenated, fontSizePx, phase, lineCount, occupancy ->
                 decisions += mapOf(
                     "id" to id, "type" to type, "text" to decidedText,
-                    "lines" to lines, "hyphenated" to hyphenated
+                    "lines" to lines, "hyphenated" to hyphenated,
+                    "fontSizePx" to fontSizePx, "phase" to phase
                 )
+                if (phase == FLOOR_PHASE) floorUnits += page to id
                 dumpLines += JSONObject().apply {
                     put("page", page)
                     put("id", id)
@@ -116,7 +119,59 @@ class TypesetRenderProofTest {
             totalUnits += decisions.size
             println("[render] $page units=${decisions.size} hyphenated=${decisions.count { it["hyphenated"] == true }} -> $outFile")
         }
-        File(outDir, "layout_dump.txt").writeText(dumpLines.joinToString("\n") + "\n")
-        println("[render] total units=$totalUnits, zero unhyphenated mid-word splits")
+        val dumpFile = File(outDir, "layout_dump.txt")
+        dumpFile.writeText(dumpLines.joinToString("\n") + "\n")
+        // A unit on the 4px floor ("floor-resort") is a microscopic-text
+        // risk: it must be named in the dump on disk, not pass silently.
+        val namedFloor = assertFloorUnitsNamedInDump(dumpFile.readText(), floorUnits)
+        namedFloor.forEach { println("[render] FLOOR-RESORT (4px floor) unit named in layout_dump.txt: $it") }
+        println("[render] total units=$totalUnits, zero unhyphenated mid-word splits, floor-resort units named=${namedFloor.size}")
+    }
+
+    @Test
+    fun floorUnitsAreNamedInDump() {
+        val dump = """
+            {"page":"page-04","id":1,"phase":"shrink","fontSizePx":18.0}
+            {"page":"page-06","id":9,"phase":"floor-resort","fontSizePx":4.0}
+        """.trimIndent()
+        val named = assertFloorUnitsNamedInDump(dump, listOf("page-06" to 9))
+        assertEquals(listOf("page-06 unit 9 (fontSizePx=4.0, phase=floor-resort)"), named)
+    }
+
+    @Test
+    fun floorUnitMissingFromDumpFails() {
+        val dump = """{"page":"page-04","id":1,"phase":"shrink","fontSizePx":18.0}"""
+        try {
+            assertFloorUnitsNamedInDump(dump, listOf("page-06" to 9))
+            throw AssertionError("expected the unnamed floor unit to fail the proof")
+        } catch (expected: AssertionError) {
+            assertTrue(expected.message!!.contains("page-06 unit 9"))
+        }
+    }
+
+    companion object {
+        /** The 4px floor phase in [Typesetter.calculateBestLayout]. */
+        const val FLOOR_PHASE = "floor-resort"
+
+        /**
+         * Every (page, id) in [floorUnits] must appear in [dumpText] as a
+         * floor-resort line carrying its font size. Returns the named
+         * units, one string per floor unit, for the proof's output.
+         */
+        fun assertFloorUnitsNamedInDump(dumpText: String, floorUnits: List<Pair<String, Int>>): List<String> {
+            val named = mutableListOf<String>()
+            val entries = dumpText.lineSequence().filter { it.isNotBlank() }.map { JSONObject(it) }.toList()
+            for ((page, id) in floorUnits) {
+                val entry = entries.firstOrNull {
+                    it.optString("page") == page && it.optInt("id") == id && it.optString("phase") == FLOOR_PHASE
+                }
+                assertTrue(
+                    "unit landing on the 4px floor phase is not named in the layout dump: $page unit $id",
+                    entry != null && entry.has("fontSizePx")
+                )
+                named += "$page unit $id (fontSizePx=${entry!!.getDouble("fontSizePx")}, phase=$FLOOR_PHASE)"
+            }
+            return named
+        }
     }
 }

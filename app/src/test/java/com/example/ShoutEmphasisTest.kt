@@ -77,7 +77,9 @@ class ShoutEmphasisTest {
             )
             assertFalse("shout id=$id must not hyphenate", outcome.hyphenated)
             assertFalse("shout id=$id must not clip", outcome.clipped)
-            assertEquals("shrink", outcome.phase)
+            // Whole-word at the available box ("shrink") or the grown
+            // interior ("grow") — never hyphenate/floor-resort.
+            assertTrue("shout id=$id phase=${outcome.phase}", outcome.phase in setOf("shrink", "grow"))
         }
 
         // Stacked one-word-per-line shaping on narrow shout bubbles:

@@ -418,7 +418,8 @@ object Typesetter {
      * before hyphenation when size drops below preferred; for narrow shout
      * bubbles, stack one word per line to spend abundant height and, if the
      * oval inset still pinches below [minSizePx] (the page median floor),
-     * widen to the 90% safe interior ([grownWidth] x [grownHeight]) before
+     * widen to the 90% safe interior ([grownWidth] x [grownHeight], phase
+     * "grow") before
      * relaxing the floor or hyphenating; (2) hyphenate at a syllable
      * ("hyphenate") as a last resort; (3) "floor-resort" (4px, more lines)
      * and nothing-fitted fallback under the same hyphenation rules.
@@ -440,11 +441,11 @@ object Typesetter {
         if (isShout && narrowBubble) {
             searchLayout(text, availableWidth, availableHeight, maxSizePx, minSizePx, typeface, maxLines, isShout = true, hyphenate = false, phase = "shrink", stackWords = true)
                 ?.let { return it }
-            searchLayout(text, grownWidth, grownHeight, maxSizePx, minSizePx, typeface, maxLines, isShout = true, hyphenate = false, phase = "shrink", stackWords = true)
+            searchLayout(text, grownWidth, grownHeight, maxSizePx, minSizePx, typeface, maxLines, isShout = true, hyphenate = false, phase = "grow", stackWords = true)
                 ?.let { return it }
-            searchLayout(text, grownWidth, grownHeight, maxSizePx, minSizePx, typeface, maxLines, isShout = true, hyphenate = false, phase = "shrink", stackWords = false)
+            searchLayout(text, grownWidth, grownHeight, maxSizePx, minSizePx, typeface, maxLines, isShout = true, hyphenate = false, phase = "grow", stackWords = false)
                 ?.let { return it }
-            searchLayout(text, grownWidth, grownHeight, minSizePx, fallbackMinSizePx, typeface, maxLines, isShout = true, hyphenate = false, phase = "shrink", stackWords = true)
+            searchLayout(text, grownWidth, grownHeight, minSizePx, fallbackMinSizePx, typeface, maxLines, isShout = true, hyphenate = false, phase = "grow", stackWords = true)
                 ?.let { return it }
         }
         searchLayout(text, availableWidth, availableHeight, maxSizePx, minSizePx, typeface, maxLines, isShout, hyphenate = false, phase = "shrink")
