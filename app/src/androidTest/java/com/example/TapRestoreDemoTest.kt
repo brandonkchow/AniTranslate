@@ -4,14 +4,13 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performTouchInput
-import androidx.compose.ui.test.printToLog
 import androidx.test.platform.app.InstrumentationRegistry
 import com.example.data.db.AppDatabase
 import com.example.data.db.JobEntity
@@ -45,15 +44,35 @@ class TapRestoreDemoTest {
     @get:Rule
     val composeRule = createAndroidComposeRule<ComponentActivity>()
 
-    @Test
-    fun tapRestoreThenReprocessOneUnit() {
+    private data class SeededEditor(
+        val outDir: File,
+        val origBmp: Bitmap,
+        val db: AppDatabase,
+        val pageId: Long,
+        val bubbles: List<Bubble>,
+        val vm: EditorViewModel
+    )
+
+    private fun shot(outDir: File, name: String) {
+        val bmp = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
+        if (bmp != null) File(outDir, name).outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+    }
+
+    private fun dismissAnr() {
+        // "System UI isn't responding" dialog: tap its Wait row (centered
+        // card on the 1080x2400 emulator). No-op when no dialog is up.
+        // Several rows probed: exact geometry shifts with font scale.
+        for (y in listOf(1330, 1400, 1470)) {
+            InstrumentationRegistry.getInstrumentation().uiAutomation
+                .executeShellCommand("input tap 540 $y").close()
+            Thread.sleep(700)
+        }
+    }
+
+    private fun seedAndOpenEditor(): SeededEditor {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
         val base = File(ctx.getExternalFilesDir(null), "maskproof")
         val outDir = File(ctx.getExternalFilesDir(null), "tapdemo").apply { mkdirs() }
-        fun shot(name: String) {
-            val bmp = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
-            if (bmp != null) File(outDir, name).outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
-        }
 
         // --- Seed a completed page from the accepted page-09 sidecar. ---
         val bubblesJson = File(base, "class20261122/bubbles_page-09.json").readText()
@@ -85,9 +104,6 @@ class TapRestoreDemoTest {
             ).first()
         }
 
-        val target = bubbles.first { it.id == 11 }
-        assertEquals(UnitState.PROCESSED, target.unitState)
-
         // --- Open the editor on the seeded page. ---
         val vm = EditorViewModel(composeRule.activity.application, pageId)
         composeRule.setContent {
@@ -98,62 +114,75 @@ class TapRestoreDemoTest {
         composeRule.waitUntil(timeoutMillis = 30_000) {
             vm.uiState.value.bubbles.isNotEmpty()
         }
+        return SeededEditor(outDir, origBmp, db, pageId, bubbles, vm)
+    }
 
-        fun dismissAnr() {
-            // "System UI isn't responding" dialog: tap its Wait row (centered
-            // card on the 1080x2400 emulator). No-op when no dialog is up.
-            // Several rows probed: exact geometry shifts with font scale.
-            for (y in listOf(1330, 1400, 1470)) {
-                InstrumentationRegistry.getInstrumentation().uiAutomation
-                    .executeShellCommand("input tap 540 $y").close()
-                Thread.sleep(700)
-            }
-        }
-
-        fun tapTarget() {
-            val cx = (target.x1 + target.x2) / 2f
-            val cy = (target.y1 + target.y2) / 2f
-            val bounds = composeRule.onNodeWithContentDescription("Manga Page Canvas")
-                .fetchSemanticsNode().boundsInRoot
-            val cw = bounds.width
-            val ch = bounds.height
-            val fitScale = kotlin.math.min(cw / origBmp.width.toFloat(), ch / origBmp.height.toFloat())
-            val fittedW = origBmp.width.toFloat() * fitScale
-            val fittedH = origBmp.height.toFloat() * fitScale
-            val offsetX = (cw - fittedW) / 2f
-            val offsetY = (ch - fittedH) / 2f
-            val canvasX = offsetX + fittedW * cx
-            val canvasY = offsetY + fittedH * cy
-            // The shared emulator throws transient system ANR dialogs under
-            // load; a tap can land on one. Retry, dismissing the dialog
-            // between attempts, until the selection actually changes.
-            dismissAnr()
-            repeat(6) { attempt ->
-                if (attempt < 2) {
-                    composeRule.onNodeWithContentDescription("Manga Page Canvas")
-                        .performTouchInput {
-                            click(Offset(canvasX, canvasY))
-                        }
-                } else {
-                    // Real input injection at the canvas's absolute bounds:
-                    // Compose-test injection has proven unreliable here.
-                    val absX = (bounds.left + canvasX).toInt()
-                    val absY = (bounds.top + canvasY).toInt()
-                    InstrumentationRegistry.getInstrumentation().uiAutomation
-                        .executeShellCommand("input tap $absX $absY").close()
-                }
-                try {
-                    composeRule.waitUntil(timeoutMillis = 8_000) {
-                        vm.uiState.value.selectedBubbleId == target.id
+    private fun tapNormalized(
+        vm: EditorViewModel,
+        origBmp: Bitmap,
+        outDir: File,
+        nx: Float,
+        ny: Float,
+        expectedUnitId: Int
+    ) {
+        val bounds = composeRule.onNodeWithContentDescription("Manga Page Canvas")
+            .fetchSemanticsNode().boundsInRoot
+        val cw = bounds.width
+        val ch = bounds.height
+        val fitScale = kotlin.math.min(cw / origBmp.width.toFloat(), ch / origBmp.height.toFloat())
+        val fittedW = origBmp.width.toFloat() * fitScale
+        val fittedH = origBmp.height.toFloat() * fitScale
+        val offsetX = (cw - fittedW) / 2f
+        val offsetY = (ch - fittedH) / 2f
+        val canvasX = offsetX + fittedW * nx
+        val canvasY = offsetY + fittedH * ny
+        // The shared emulator throws transient system ANR dialogs under
+        // load; a tap can land on one. Retry, dismissing the dialog
+        // between attempts, until the selection actually changes.
+        dismissAnr()
+        repeat(6) { attempt ->
+            if (attempt < 2) {
+                composeRule.onNodeWithContentDescription("Manga Page Canvas")
+                    .performTouchInput {
+                        click(Offset(canvasX, canvasY))
                     }
-                    return
-                } catch (e: Throwable) {
-                    shot("diag_attempt.png")
-                    dismissAnr()
-                }
+            } else {
+                // Real input injection at the canvas's absolute bounds:
+                // Compose-test injection has proven unreliable here.
+                val absX = (bounds.left + canvasX).toInt()
+                val absY = (bounds.top + canvasY).toInt()
+                InstrumentationRegistry.getInstrumentation().uiAutomation
+                    .executeShellCommand("input tap $absX $absY").close()
             }
-            throw AssertionError("tap never selected unit ${target.id}")
+            try {
+                composeRule.waitUntil(timeoutMillis = 8_000) {
+                    vm.uiState.value.selectedBubbleId == expectedUnitId
+                }
+                return
+            } catch (e: Throwable) {
+                shot(outDir, "diag_attempt.png")
+                dismissAnr()
+            }
         }
+        throw AssertionError("tap never selected unit $expectedUnitId")
+    }
+
+    private fun tapTarget(vm: EditorViewModel, origBmp: Bitmap, outDir: File, target: Bubble) {
+        val cx = (target.x1 + target.x2) / 2f
+        val cy = (target.y1 + target.y2) / 2f
+        tapNormalized(vm, origBmp, outDir, cx, cy, target.id)
+    }
+
+    @Test
+    fun tapRestoreThenReprocessOneUnit() {
+        val env = seedAndOpenEditor()
+        val outDir = env.outDir
+        val origBmp = env.origBmp
+        val db = env.db
+        val pageId = env.pageId
+        val vm = env.vm
+        val target = env.bubbles.first { it.id == 11 }
+        assertEquals(UnitState.PROCESSED, target.unitState)
 
         fun persistedState(): UnitState? = runBlocking {
             db.jobDao().getPageByIdDirect(pageId)
@@ -175,7 +204,7 @@ class TapRestoreDemoTest {
         }
 
         // --- Tap: one action sheet. ---
-        tapTarget()
+        tapTarget(vm, origBmp, outDir, target)
         composeRule.waitUntil(timeoutMillis = 10_000) {
             try {
                 composeRule.onNodeWithTag("restore_original").assertExists()
@@ -184,14 +213,14 @@ class TapRestoreDemoTest {
                 false
             }
         }
-        shot("shot1_sheet.png")
+        shot(outDir, "shot1_sheet.png")
 
         // --- Restore: state persists, Japanese returns bit-for-bit. ---
         composeRule.onNodeWithTag("restore_original").performTouchInput { click() }
         composeRule.waitUntil(timeoutMillis = 240_000) {
             persistedState() == UnitState.RESTORED && !vm.uiState.value.isRendering
         }
-        shot("shot2_restored.png")
+        shot(outDir, "shot2_restored.png")
         val restoredDiff = boxDifferenceFromOriginal()
         // Unit 10's detector box overlaps unit 11's right edge, so its wipe
         // legitimately touches a strip of this box; restored must be near-
@@ -199,19 +228,61 @@ class TapRestoreDemoTest {
         assertTrue("restored unit must match original, diff=$restoredDiff", restoredDiff < 0.05)
 
         // --- Tap again: re-process. English returns, state back to PROCESSED. ---
-        tapTarget()
+        tapTarget(vm, origBmp, outDir, target)
         composeRule.onNodeWithTag("reprocess_unit").assertExists()
         composeRule.onNodeWithTag("reprocess_unit").performTouchInput { click() }
         composeRule.waitUntil(timeoutMillis = 240_000) {
             persistedState() == UnitState.PROCESSED && !vm.uiState.value.isRendering
         }
-        shot("shot3_reprocessed.png")
+        shot(outDir, "shot3_reprocessed.png")
         val reprocessedDiff = boxDifferenceFromOriginal()
         assertTrue("re-processed unit must differ from original, diff=$reprocessedDiff", reprocessedDiff > 0.10)
 
         File(outDir, "demo_report.txt").writeText(
             "target unit ${target.id}: restoredDiff=$restoredDiff reprocessedDiff=$reprocessedDiff\n" +
                 "persisted states: RESTORED then PROCESSED, in pages.bubblesJson\n"
+        )
+    }
+
+    @Test
+    fun nestedTapPicksSmallerUnit() {
+        val env = seedAndOpenEditor()
+        val outDir = env.outDir
+        val origBmp = env.origBmp
+        val vm = env.vm
+
+        shot(outDir, "editor_after_boxes.png")
+
+        // (0.53, 0.349) lies inside both unit 7 (large title box) and unit 9 (smaller nested bubble).
+        tapNormalized(vm, origBmp, outDir, 0.53f, 0.349f, 9)
+
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            try {
+                composeRule.onNodeWithText("Bubble #9", substring = true).assertExists()
+                true
+            } catch (e: AssertionError) {
+                false
+            }
+        }
+
+        val titleText = composeRule.onNodeWithText("Bubble #9", substring = true)
+            .fetchSemanticsNode().config[SemanticsProperties.Text].joinToString("") { it.text }
+        val jpText = composeRule.onNodeWithText("この調子で", substring = true)
+            .fetchSemanticsNode().config[SemanticsProperties.Text].joinToString("") { it.text }
+        val enText = composeRule.onNodeWithText("Let's keep it up", substring = true)
+            .fetchSemanticsNode().config[SemanticsProperties.Text].joinToString("") { it.text }
+
+        assertTrue("Expected title starting with 'Bubble #9', got '$titleText'", titleText.startsWith("Bubble #9"))
+        assertTrue("Expected Japanese preview starting with 'この調子で', got '$jpText'", jpText.startsWith("この調子で"))
+        assertTrue("Expected English preview starting with \"Let's keep it up\", got '$enText'", enText.startsWith("Let's keep it up"))
+
+        shot(outDir, "editor_nested_sheet.png")
+
+        File(outDir, "nested_report.txt").writeText(
+            "tapped=(0.53, 0.349) expectedUnit=9\n" +
+                "title=$titleText\n" +
+                "japanese=$jpText\n" +
+                "english=$enText\n"
         )
     }
 }
