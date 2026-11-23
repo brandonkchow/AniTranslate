@@ -48,7 +48,7 @@ object MaskWiper {
         tierOverride: WipeTier? = null
     ): Bitmap? = withContext(Dispatchers.Default) {
         val ctdManager = CtdModelManager.getInstance(context)
-        if (!ctdManager.isDownloaded) ctdManager.download()
+        if (!ctdManager.isDownloaded) ctdManager.ensureReady()
         val ctd = CtdTextMask.getInstance(context) ?: return@withContext null
         val seg = ctd.segment(sourceBitmap) ?: return@withContext null
         val w = sourceBitmap.width; val h = sourceBitmap.height

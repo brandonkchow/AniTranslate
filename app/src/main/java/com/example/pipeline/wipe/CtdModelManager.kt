@@ -6,6 +6,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -69,7 +71,27 @@ class CtdModelManager(filesDir: File, baseHttpClient: OkHttpClient = HttpClientP
     private val _state = MutableStateFlow<State>(if (isDownloaded) State.Ready else State.NotDownloaded)
     val state: StateFlow<State> = _state.asStateFlow()
 
-    suspend fun download(force: Boolean = false): Boolean = withContext(Dispatchers.IO) {
+    private val downloadMutex = Mutex()
+
+    /**
+     * Wipe-path entry point: true immediately when downloaded, one auto
+     * attempt from [State.NotDownloaded], false without a network attempt
+     * after a failed auto attempt. Manual [download] still retries.
+     */
+    suspend fun ensureReady(): Boolean {
+        if (isDownloaded) { _state.value = State.Ready; return true }
+        if (_state.value !is State.NotDownloaded) return false
+        return download()
+    }
+
+    suspend fun download(force: Boolean = false): Boolean {
+        // Single-flight: a caller arriving while one is in flight waits for
+        // it and reuses its outcome instead of a second .part write.
+        if (!downloadMutex.tryLock()) {
+            return downloadMutex.withLock { isDownloaded }
+        }
+        try {
+            return withContext(Dispatchers.IO) {
         try {
             if (!modelDir.exists() && !modelDir.mkdirs()) {
                 _state.value = State.Failed("Cannot create ${modelDir.absolutePath}"); return@withContext false
@@ -80,8 +102,8 @@ class CtdModelManager(filesDir: File, baseHttpClient: OkHttpClient = HttpClientP
             _state.value = State.Downloading(0f)
             Request.Builder().url(DOWNLOAD_URL).get().build().let { req ->
                 client.newCall(req).execute().use { resp ->
-                    if (!resp.isSuccessful) { _state.value = State.Failed("HTTP ${resp.code}"); return@withContext false }
-                    val body = resp.body ?: run { _state.value = State.Failed("Empty body"); return@withContext false }
+                    if (!resp.isSuccessful) { part.delete(); _state.value = State.Failed("HTTP ${resp.code}"); return@withContext false }
+                    val body = resp.body ?: run { part.delete(); _state.value = State.Failed("Empty body"); return@withContext false }
                     val total = body.contentLength().takeIf { it > 0 } ?: EXPECTED_BYTES
                     var done = 0L; var lastEmit = 0L
                     FileOutputStream(part).use { out ->
@@ -112,8 +134,13 @@ class CtdModelManager(filesDir: File, baseHttpClient: OkHttpClient = HttpClientP
             _state.value = State.Ready
             true
         } catch (t: Throwable) {
+            runCatching { File(modelDir, "$FILE_NAME.part").delete() }
             _state.value = State.Failed("Comic text detector download failed: ${t.message}")
             false
+        }
+            }
+        } finally {
+            downloadMutex.unlock()
         }
     }
 }

@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -194,7 +195,7 @@ class EditorViewModel(
                 // Wipe: mask wipe only; null fails closed with the named
                 // message and aborts the re-render, keeping prior state.
                 val wipedBmp = com.example.pipeline.wipe.MaskWiper.wipeBubbles(context, origBmp, bubbles) ?: run {
-                    _uiState.value = _uiState.value.copy(isRendering = false)
+                    _uiState.update { it.copy(isRendering = false) }
                     _eventFlow.emit(EditorEvent.ShowMessage(com.example.pipeline.wipe.CtdModelManager.UNAVAILABLE_MESSAGE))
                     return@withContext
                 }
