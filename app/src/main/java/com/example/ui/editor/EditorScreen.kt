@@ -1,5 +1,6 @@
 package com.example.ui.editor
 
+import android.graphics.BitmapFactory
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -84,6 +85,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -94,6 +96,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.example.data.models.Bubble
 import com.example.data.models.UnitState
+import com.example.ui.theme.EditorialAmber
 import com.example.ui.theme.EditorialCanvas
 import com.example.ui.theme.EditorialCrimson
 import com.example.ui.theme.EditorialCrimsonLight
@@ -334,12 +337,38 @@ fun EditorScreen(
             ) {
                 val containerWidth = constraints.maxWidth.toFloat()
                 val containerHeight = constraints.maxHeight.toFloat()
+                val density = LocalDensity.current
+
+                val imageFile = uiState.currentImageFile
+                val (bmpW, bmpH) = remember(page?.width, page?.height, imageFile?.absolutePath, imageFile?.lastModified()) {
+                    val pw = page?.width ?: 0
+                    val ph = page?.height ?: 0
+                    if (pw > 0 && ph > 0) {
+                        pw.toFloat() to ph.toFloat()
+                    } else if (imageFile != null && imageFile.exists()) {
+                        val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                        BitmapFactory.decodeFile(imageFile.absolutePath, opts)
+                        if (opts.outWidth > 0 && opts.outHeight > 0) {
+                            opts.outWidth.toFloat() to opts.outHeight.toFloat()
+                        } else {
+                            containerWidth to containerHeight
+                        }
+                    } else {
+                        containerWidth to containerHeight
+                    }
+                }
+
+                val hasValidDims = containerWidth > 0f && containerHeight > 0f && bmpW > 0f && bmpH > 0f
+                val fitScale = if (hasValidDims) min(containerWidth / bmpW, containerHeight / bmpH) else 1f
+                val fittedW = if (hasValidDims) bmpW * fitScale else containerWidth
+                val fittedH = if (hasValidDims) bmpH * fitScale else containerHeight
+                val offsetX = if (hasValidDims) (containerWidth - fittedW) / 2f else 0f
+                val offsetY = if (hasValidDims) (containerHeight - fittedH) / 2f else 0f
 
                 // Render current image. Cache key carries the file's mtime:
                 // re-renders overwrite the same cache path, and Coil would
                 // otherwise keep serving the pre-edit bitmap.
-                if (uiState.currentImageFile != null && uiState.currentImageFile!!.exists()) {
-                    val imageFile = uiState.currentImageFile!!
+                if (imageFile != null && imageFile.exists()) {
                     AsyncImage(
                         model = coil.request.ImageRequest.Builder(LocalContext.current)
                             .data(imageFile)
@@ -355,32 +384,41 @@ fun EditorScreen(
                 // Draw overlay bounding boxes
                 uiState.bubbles.forEach { bubble ->
                     val isSelected = bubble.id == uiState.selectedBubbleId
-                    val leftPx = bubble.x1 * containerWidth
-                    val topPx = bubble.y1 * containerHeight
-                    val widthPx = bubble.width * containerWidth
-                    val heightPx = bubble.height * containerHeight
+                    val leftPx = offsetX + bubble.x1 * fittedW
+                    val topPx = offsetY + bubble.y1 * fittedH
+                    val widthPx = max(16f, bubble.width * fittedW)
+                    val heightPx = max(16f, bubble.height * fittedH)
+                    val boxWidthDp = with(density) { widthPx.toDp() }
+                    val boxHeightDp = with(density) { heightPx.toDp() }
+                    val stateColor = when (bubble.unitState) {
+                        UnitState.PROCESSED -> EditorialLavender
+                        UnitState.SKIPPED -> EditorialAmber
+                        UnitState.RESTORED -> EditorialSuccess
+                    }
+                    val borderColor = when {
+                        isSelected -> stateColor
+                        bubble.visible -> stateColor.copy(alpha = 0.6f)
+                        else -> EditorialCrimsonLight.copy(alpha = 0.5f)
+                    }
 
                     Box(
                         modifier = Modifier
                             .offset { IntOffset(leftPx.roundToInt(), topPx.roundToInt()) }
-                            .size(
-                                width = max(16f, widthPx).dp,
-                                height = max(16f, heightPx).dp
-                            )
+                            .size(width = boxWidthDp, height = boxHeightDp)
                             .border(
                                 width = if (isSelected) 2.dp else 1.dp,
-                                color = if (isSelected) EditorialLavender else if (bubble.visible) EditorialLavender.copy(alpha = 0.6f) else EditorialCrimsonLight.copy(alpha = 0.5f),
+                                color = borderColor,
                                 shape = RoundedCornerShape(4.dp)
                             )
                             .background(
-                                color = if (isSelected) EditorialLavender.copy(alpha = 0.2f) else Color.Transparent
+                                color = if (isSelected) stateColor.copy(alpha = 0.2f) else Color.Transparent
                             )
-                            .pointerInput(bubble.id, isSelected) {
-                                if (isSelected) {
+                            .pointerInput(bubble.id, isSelected, fittedW, fittedH) {
+                                if (isSelected && fittedW > 0f && fittedH > 0f) {
                                     detectDragGestures { change, dragAmount ->
                                         change.consume()
-                                        val deltaX = dragAmount.x / containerWidth
-                                        val deltaY = dragAmount.y / containerHeight
+                                        val deltaX = dragAmount.x / fittedW
+                                        val deltaY = dragAmount.y / fittedH
                                         val newX1 = (bubble.x1 + deltaX).coerceIn(0f, 1f - bubble.width)
                                         val newY1 = (bubble.y1 + deltaY).coerceIn(0f, 1f - bubble.height)
                                         val newX2 = (newX1 + bubble.width).coerceIn(0f, 1f)
@@ -390,11 +428,13 @@ fun EditorScreen(
                                 }
                             }
                     ) {
-                        // Tag Badge
+                        // Tag Badge positioned outside the box's top-left corner
                         Surface(
-                            color = if (isSelected) EditorialLavender else Color.Black.copy(alpha = 0.7f),
-                            shape = RoundedCornerShape(bottomEnd = 4.dp),
-                            modifier = Modifier.align(Alignment.TopStart)
+                            color = if (isSelected) stateColor else Color.Black.copy(alpha = 0.7f),
+                            shape = RoundedCornerShape(4.dp),
+                            modifier = Modifier
+                                .align(Alignment.TopStart)
+                                .offset(x = (-2).dp, y = (-14).dp)
                         ) {
                             Text(
                                 text = "#${bubble.id}",
@@ -411,15 +451,17 @@ fun EditorScreen(
                                 modifier = Modifier
                                     .align(Alignment.BottomEnd)
                                     .size(16.dp)
-                                    .background(EditorialLavender, CircleShape)
-                                    .pointerInput(bubble.id) {
-                                        detectDragGestures { change, dragAmount ->
-                                            change.consume()
-                                            val deltaX = dragAmount.x / containerWidth
-                                            val deltaY = dragAmount.y / containerHeight
-                                            val newX2 = (bubble.x2 + deltaX).coerceIn(bubble.x1 + 0.02f, 1f)
-                                            val newY2 = (bubble.y2 + deltaY).coerceIn(bubble.y1 + 0.02f, 1f)
-                                            viewModel.updateBubbleBox(bubble.id, listOf(bubble.x1, bubble.y1, newX2, newY2))
+                                    .background(stateColor, CircleShape)
+                                    .pointerInput(bubble.id, fittedW, fittedH) {
+                                        if (fittedW > 0f && fittedH > 0f) {
+                                            detectDragGestures { change, dragAmount ->
+                                                change.consume()
+                                                val deltaX = dragAmount.x / fittedW
+                                                val deltaY = dragAmount.y / fittedH
+                                                val newX2 = (bubble.x2 + deltaX).coerceIn(bubble.x1 + 0.02f, 1f)
+                                                val newY2 = (bubble.y2 + deltaY).coerceIn(bubble.y1 + 0.02f, 1f)
+                                                viewModel.updateBubbleBox(bubble.id, listOf(bubble.x1, bubble.y1, newX2, newY2))
+                                            }
                                         }
                                     }
                             )
@@ -435,12 +477,20 @@ fun EditorScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .pointerInput(uiState.bubbles) {
+                        .pointerInput(uiState.bubbles, offsetX, offsetY, fittedW, fittedH) {
                             detectTapGestures { tapOffset ->
-                                val relX = tapOffset.x / containerWidth
-                                val relY = tapOffset.y / containerHeight
-                                val hit = uiState.bubbles.find { b ->
-                                    relX in b.x1..b.x2 && relY in b.y1..b.y2
+                                val hit = if (fittedW > 0f && fittedH > 0f) {
+                                    val relX = (tapOffset.x - offsetX) / fittedW
+                                    val relY = (tapOffset.y - offsetY) / fittedH
+                                    if (relX in 0f..1f && relY in 0f..1f) {
+                                        uiState.bubbles
+                                            .filter { b -> relX in b.x1..b.x2 && relY in b.y1..b.y2 }
+                                            .minByOrNull { b -> b.width * b.height }
+                                    } else {
+                                        null
+                                    }
+                                } else {
+                                    null
                                 }
                                 viewModel.selectBubble(hit?.id)
                                 editingBubble = false
@@ -489,25 +539,66 @@ fun EditorScreen(
                         fontWeight = FontWeight.Bold,
                         fontSize = 16.sp
                     )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = truncatePreview(sheetBubble.text, "(no OCR text)"),
+                        fontSize = 13.sp,
+                        color = EditorialTextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = truncatePreview(sheetBubble.translated, "(no translation)"),
+                        fontSize = 13.sp,
+                        color = EditorialTextMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                     Spacer(modifier = Modifier.height(12.dp))
-                    if (sheetBubble.unitState == UnitState.RESTORED) {
-                        Button(
-                            onClick = { viewModel.reprocessBubble(sheetBubble.id); actionSheetBubbleId = null },
-                            modifier = Modifier.fillMaxWidth().testTag("reprocess_unit"),
-                            colors = ButtonDefaults.buttonColors(containerColor = EditorialLavender, contentColor = EditorialDeepViolet)
-                        ) { Text("Re-process") }
-                    } else {
-                        Button(
-                            onClick = { viewModel.restoreBubble(sheetBubble.id); actionSheetBubbleId = null },
-                            modifier = Modifier.fillMaxWidth().testTag("restore_original"),
-                            colors = ButtonDefaults.buttonColors(containerColor = EditorialLavender, contentColor = EditorialDeepViolet)
-                        ) { Text("Restore original") }
+                    when (sheetBubble.unitState) {
+                        UnitState.PROCESSED -> {
+                            Button(
+                                onClick = { viewModel.restoreBubble(sheetBubble.id); actionSheetBubbleId = null },
+                                modifier = Modifier.fillMaxWidth().testTag("restore_original"),
+                                colors = ButtonDefaults.buttonColors(containerColor = EditorialLavender, contentColor = EditorialDeepViolet)
+                            ) { Text("Restore original") }
+                            Spacer(modifier = Modifier.height(8.dp))
+                            OutlinedButton(
+                                onClick = { editingBubble = true; actionSheetBubbleId = null },
+                                modifier = Modifier.fillMaxWidth().testTag("edit_text")
+                            ) { Text("Edit text") }
+                        }
+                        UnitState.SKIPPED -> {
+                            Text(
+                                text = "Left as drawn — not wiped or translated.",
+                                fontSize = 13.sp,
+                                color = EditorialTextSecondary
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Button(
+                                onClick = { viewModel.reprocessBubble(sheetBubble.id); actionSheetBubbleId = null },
+                                modifier = Modifier.fillMaxWidth().testTag("reprocess_unit"),
+                                colors = ButtonDefaults.buttonColors(containerColor = EditorialLavender, contentColor = EditorialDeepViolet)
+                            ) { Text("Re-process") }
+                            Spacer(modifier = Modifier.height(8.dp))
+                            OutlinedButton(
+                                onClick = { editingBubble = true; actionSheetBubbleId = null },
+                                modifier = Modifier.fillMaxWidth().testTag("edit_text")
+                            ) { Text("Edit text") }
+                        }
+                        UnitState.RESTORED -> {
+                            Button(
+                                onClick = { viewModel.reprocessBubble(sheetBubble.id); actionSheetBubbleId = null },
+                                modifier = Modifier.fillMaxWidth().testTag("reprocess_unit"),
+                                colors = ButtonDefaults.buttonColors(containerColor = EditorialLavender, contentColor = EditorialDeepViolet)
+                            ) { Text("Re-process") }
+                            Spacer(modifier = Modifier.height(8.dp))
+                            OutlinedButton(
+                                onClick = { editingBubble = true; actionSheetBubbleId = null },
+                                modifier = Modifier.fillMaxWidth().testTag("edit_text")
+                            ) { Text("Edit text") }
+                        }
                     }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedButton(
-                        onClick = { editingBubble = true; actionSheetBubbleId = null },
-                        modifier = Modifier.fillMaxWidth().testTag("edit_text")
-                    ) { Text("Edit text") }
                     TextButton(
                         onClick = { actionSheetBubbleId = null },
                         modifier = Modifier.fillMaxWidth().testTag("unit_sheet_cancel")
@@ -517,6 +608,11 @@ fun EditorScreen(
             }
         }
     }
+}
+
+private fun truncatePreview(text: String, blankFallback: String, maxChars: Int = 24): String {
+    if (text.isBlank()) return blankFallback
+    return if (text.length > maxChars) "${text.take(maxChars)}…" else text
 }
 
 @Composable

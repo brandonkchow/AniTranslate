@@ -113,6 +113,17 @@ class TapRestoreDemoTest {
         fun tapTarget() {
             val cx = (target.x1 + target.x2) / 2f
             val cy = (target.y1 + target.y2) / 2f
+            val bounds = composeRule.onNodeWithContentDescription("Manga Page Canvas")
+                .fetchSemanticsNode().boundsInRoot
+            val cw = bounds.width
+            val ch = bounds.height
+            val fitScale = kotlin.math.min(cw / origBmp.width.toFloat(), ch / origBmp.height.toFloat())
+            val fittedW = origBmp.width.toFloat() * fitScale
+            val fittedH = origBmp.height.toFloat() * fitScale
+            val offsetX = (cw - fittedW) / 2f
+            val offsetY = (ch - fittedH) / 2f
+            val canvasX = offsetX + fittedW * cx
+            val canvasY = offsetY + fittedH * cy
             // The shared emulator throws transient system ANR dialogs under
             // load; a tap can land on one. Retry, dismissing the dialog
             // between attempts, until the selection actually changes.
@@ -121,15 +132,13 @@ class TapRestoreDemoTest {
                 if (attempt < 2) {
                     composeRule.onNodeWithContentDescription("Manga Page Canvas")
                         .performTouchInput {
-                            click(Offset(width * cx, height * cy))
+                            click(Offset(canvasX, canvasY))
                         }
                 } else {
                     // Real input injection at the canvas's absolute bounds:
                     // Compose-test injection has proven unreliable here.
-                    val bounds = composeRule.onNodeWithContentDescription("Manga Page Canvas")
-                        .fetchSemanticsNode().boundsInRoot
-                    val absX = (bounds.left + bounds.width * cx).toInt()
-                    val absY = (bounds.top + bounds.height * cy).toInt()
+                    val absX = (bounds.left + canvasX).toInt()
+                    val absY = (bounds.top + canvasY).toInt()
                     InstrumentationRegistry.getInstrumentation().uiAutomation
                         .executeShellCommand("input tap $absX $absY").close()
                 }
