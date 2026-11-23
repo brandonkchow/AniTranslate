@@ -644,7 +644,13 @@ class PagePipeline(
             return@withContext currentPage
         }
 
-        val wipedBmp = FlatWiper.wipeBubbles(origBmp, bubbles)
+        // Mask wipe (Step 1, prompt 20261118): learned CTD mask, tier from
+        // settings. Null means the mask path cannot run; fall back to the
+        // component wipe rather than failing the page.
+        val wipedBmp = com.example.pipeline.wipe.MaskWiper.wipeBubbles(context, origBmp, bubbles)
+            ?: FlatWiper.wipeBubbles(origBmp, bubbles).also {
+                RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "WIPE_FALLBACK", "Mask wipe unavailable, component wipe used")
+            }
         val wipedFile = File(context.cacheDir, "wiped_${currentPage.id}.png")
         ImageScaler.saveBitmapPng(wipedBmp, wipedFile)
         currentPage = currentPage.copy(wipedImagePath = wipedFile.absolutePath)

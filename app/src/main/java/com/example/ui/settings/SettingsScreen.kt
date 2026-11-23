@@ -135,6 +135,8 @@ fun SettingsScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val testResults by viewModel.testResults.collectAsStateWithLifecycle()
     val baberuState by viewModel.baberuState.collectAsStateWithLifecycle()
+    val wipeTierMode by viewModel.wipeTierMode.collectAsStateWithLifecycle()
+    val lamaState by viewModel.lamaState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
     var showAddSlotDialog by remember { mutableStateOf(false) }
@@ -416,78 +418,70 @@ fun SettingsScreen(
                         color = EditorialLavender
                     )
 
-                    // Option 1: Flat fill (MVP)
+                    // Wipe tiers (Step 1, prompt 20261118): both tiers use the
+                    // learned CTD mask; they differ only in the fill.
+                    listOf(
+                        com.example.pipeline.wipe.WipeTierMode.AUTO to
+                            ("Auto (recommended)" to "Best quality when this device can run it, Standard otherwise."),
+                        com.example.pipeline.wipe.WipeTierMode.STANDARD to
+                            ("Standard" to "Mask + nearest-colour fill. Bundled with the app, works on every phone."),
+                        com.example.pipeline.wipe.WipeTierMode.BEST to
+                            ("Best quality" to "Mask + LaMa model fill. Needs the optional 208 MB model download below.")
+                    ).forEach { (mode, texts) ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = wipeTierMode == mode,
+                                onClick = { viewModel.setWipeTierMode(mode) }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = texts.first,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = EditorialTextPrimary
+                                )
+                                Text(
+                                    text = texts.second,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = EditorialTextMuted
+                                )
+                            }
+                        }
+                    }
+
+                    // Optional LaMa model for the Best tier.
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        RadioButton(
-                            selected = true,
-                            onClick = null
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Flat Fill (MVP)",
+                                text = "LaMa fill model (Best tier)",
                                 style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.SemiBold,
                                 color = EditorialTextPrimary
                             )
                             Text(
-                                text = "Fast local outer-ring color sampling with rounded fill. Zero network calls.",
+                                text = when (val s = lamaState) {
+                                    is com.example.pipeline.wipe.InpaintModelManager.State.Ready -> "Downloaded (208 MB)"
+                                    is com.example.pipeline.wipe.InpaintModelManager.State.Downloading -> "Downloading ${(s.progress * 100).toInt()}%"
+                                    is com.example.pipeline.wipe.InpaintModelManager.State.Failed -> "Download failed: ${s.message}"
+                                    else -> "Not downloaded (208 MB, optional)"
+                                },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = EditorialTextMuted
                             )
                         }
-                    }
-
-                    // Option 2: Replicate LaMa (Disabled)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        RadioButton(
-                            selected = false,
-                            enabled = false,
-                            onClick = null
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Column {
-                            Text(
-                                text = "Replicate LaMa",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = EditorialTextMuted.copy(alpha = 0.6f)
-                            )
-                            Text(
-                                text = "Coming next. No network calls.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = EditorialTextMuted.copy(alpha = 0.4f)
-                            )
-                        }
-                    }
-
-                    // Option 3: fal (Disabled)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        RadioButton(
-                            selected = false,
-                            enabled = false,
-                            onClick = null
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Column {
-                            Text(
-                                text = "fal AI Inpainter",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = EditorialTextMuted.copy(alpha = 0.6f)
-                            )
-                            Text(
-                                text = "Coming next. No network calls.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = EditorialTextMuted.copy(alpha = 0.4f)
-                            )
+                        if (lamaState !is com.example.pipeline.wipe.InpaintModelManager.State.Ready &&
+                            lamaState !is com.example.pipeline.wipe.InpaintModelManager.State.Downloading
+                        ) {
+                            OutlinedButton(onClick = { viewModel.downloadLamaModel() }) {
+                                Text("Download")
+                            }
                         }
                     }
                 }

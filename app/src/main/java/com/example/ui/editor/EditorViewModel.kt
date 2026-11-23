@@ -163,8 +163,9 @@ class EditorViewModel(
                 val context = getApplication<Application>()
                 val origBmp = ImageScaler.loadBitmapFromFile(origFile) ?: return@withContext
 
-                // Wipe
-                val wipedBmp = FlatWiper.wipeBubbles(origBmp, bubbles)
+                // Wipe: mask wipe first (Step 1), component wipe as fallback.
+                val wipedBmp = com.example.pipeline.wipe.MaskWiper.wipeBubbles(context, origBmp, bubbles)
+                    ?: FlatWiper.wipeBubbles(origBmp, bubbles)
                 val wipedFile = File(context.cacheDir, "wiped_${page.id}.png")
                 ImageScaler.saveBitmapPng(wipedBmp, wipedFile)
 

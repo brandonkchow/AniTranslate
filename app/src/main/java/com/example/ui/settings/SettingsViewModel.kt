@@ -63,6 +63,22 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    private val inpaintModelManager = com.example.pipeline.wipe.InpaintModelManager.getInstance(application)
+
+    val lamaState: StateFlow<com.example.pipeline.wipe.InpaintModelManager.State> = inpaintModelManager.state
+
+    private val _wipeTierMode = MutableStateFlow(com.example.pipeline.wipe.WipeTierStore.mode(application))
+    val wipeTierMode: StateFlow<com.example.pipeline.wipe.WipeTierMode> = _wipeTierMode.asStateFlow()
+
+    fun setWipeTierMode(mode: com.example.pipeline.wipe.WipeTierMode) {
+        com.example.pipeline.wipe.WipeTierStore.setMode(getApplication(), mode)
+        _wipeTierMode.value = mode
+    }
+
+    fun downloadLamaModel() {
+        viewModelScope.launch { inpaintModelManager.download() }
+    }
+
     private val _testResults = MutableStateFlow<Map<String, SlotTestResult>>(emptyMap())
     val testResults: StateFlow<Map<String, SlotTestResult>> = _testResults.asStateFlow()
 
