@@ -212,6 +212,51 @@ class KeyRouterFallbackTest {
     }
 
     @Test
+    fun defaultVisionSlotIsDetectOcrOnly() {
+        val defaults = storage.createDefaultSlots()
+        val geminiDefault = defaults.first { it.provider == ApiProvider.GEMINI }
+        val openRouterDefault = defaults.first { it.provider == ApiProvider.OPENROUTER }
+        val groqDefault = defaults.first { it.provider == ApiProvider.GROQ }
+
+        assertEquals(SlotRole.DETECT_OCR, geminiDefault.role)
+        assertEquals(SlotRole.TRANSLATE, openRouterDefault.role)
+        assertEquals(SlotRole.TRANSLATE, groqDefault.role)
+    }
+
+    @Test
+    fun defaultSlotsRouteVisionToGeminiAndNeverRouteTranslateToGemini() = runBlocking {
+        val defaults = storage.createDefaultSlots().map { slot ->
+            slot.copy(
+                enabled = true,
+                apiKey = "key-${slot.provider.name.lowercase()}",
+                isInvalidKey = false,
+                isModelRetired = false
+            )
+        }
+        storage.saveSlots(defaults)
+        defaults.forEach { storage.resetSlotCooldown(it.id) }
+
+        val geminiDefault = defaults.first { it.provider == ApiProvider.GEMINI }
+
+        val (detectSlot, _) = router.getAvailableSlot(PipelineStage.DETECT_OCR)
+        assertNotNull("DETECT_OCR must have an eligible default slot", detectSlot)
+        assertEquals(ApiProvider.GEMINI, detectSlot!!.provider)
+        assertEquals(geminiDefault.id, detectSlot.id)
+
+        val excluded = mutableSetOf<String>()
+        while (true) {
+            val (translateSlot, _) = router.getAvailableSlot(PipelineStage.TRANSLATE, excluded)
+            if (translateSlot == null) break
+            assertNotEquals(
+                "TRANSLATE must never select the default GEMINI slot",
+                ApiProvider.GEMINI,
+                translateSlot.provider
+            )
+            excluded.add(translateSlot.id)
+        }
+    }
+
+    @Test
     fun explainReportsNoApiKeyForEnabledKeylessSlot() {
         val openRouter = storage.loadSlots().first { it.provider == ApiProvider.OPENROUTER }
         storage.updateSlot(

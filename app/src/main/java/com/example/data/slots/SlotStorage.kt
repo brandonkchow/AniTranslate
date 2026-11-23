@@ -132,7 +132,7 @@ class SlotStorage private constructor(private val context: Context) {
                 apiKey = envGeminiKey,
                 model = "gemini-2.5-flash",
                 baseUrl = "https://generativelanguage.googleapis.com/v1beta",
-                role = SlotRole.ANY,
+                role = SlotRole.DETECT_OCR,
                 enabled = true
             ),
             ApiSlot(
