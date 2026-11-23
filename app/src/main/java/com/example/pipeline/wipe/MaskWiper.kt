@@ -57,20 +57,31 @@ object MaskWiper {
         if (erase.none { it }) return@withContext sourceBitmap.copy(Bitmap.Config.ARGB_8888, true)
 
         val tier = tierOverride ?: resolvedTier(context)
+        // Classification is carried on the bubbles (computed once at
+        // detect); SKIP boxes were excluded from the erase mask above.
+        // Restore their pixels from the original in the output so a
+        // neighbouring processed box overlapping a SKIP unit cannot wipe
+        // it (Part 1, prompt 20261118).
+        val srcPx = IntArray(w * h)
+        sourceBitmap.getPixels(srcPx, 0, w, 0, 0, w, h)
         if (tier == WipeTier.BEST) {
             val manager = InpaintModelManager.getInstance(context)
             val lama = LamaFiller.getInstance(manager.modelFile)
             if (lama != null) {
-                lama.fill(sourceBitmap, erase, boxes)?.let { return@withContext it }
+                lama.fill(sourceBitmap, erase, boxes)?.let { filled ->
+                    val outPx = IntArray(w * h)
+                    filled.getPixels(outPx, 0, w, 0, 0, w, h)
+                    WipeGate.restoreSkipPixels(srcPx, outPx, w, h, bubbles)
+                    return@withContext Bitmap.createBitmap(outPx, w, h, Bitmap.Config.ARGB_8888)
+                }
                 Log.w(TAG, "Best tier: LaMa fill returned null, falling back to nearest")
             } else {
                 Log.w(TAG, "Best tier requested but LaMa model absent, using Standard fill")
             }
         }
 
-        val px = IntArray(w * h)
-        sourceBitmap.getPixels(px, 0, w, 0, 0, w, h)
-        val out = MaskComposite.compositeNearestWH(px, w, h, erase)
+        val out = MaskComposite.compositeNearestWH(srcPx, w, h, erase)
+        WipeGate.restoreSkipPixels(srcPx, out, w, h, bubbles)
         Bitmap.createBitmap(out, w, h, Bitmap.Config.ARGB_8888)
     }
 }
