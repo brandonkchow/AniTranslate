@@ -35,7 +35,7 @@ object FlatWiper {
 
             // Out-of-scope types only (side_text). Free text (floating) is handled
             // by the extent-box branch below (BACKLOG:13).
-            if (bubble.isNonBalloon) continue
+            if (bubble.isNonBalloon || bubble.isRestored) continue
 
             // Free text (detector text_free, BACKLOG:13): there is no balloon wall
             // or measured enclosure to wipe within, so the wipe extent is the

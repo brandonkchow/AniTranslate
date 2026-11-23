@@ -50,7 +50,7 @@ object MaskWiper {
         val ctd = CtdTextMask.getInstance(context) ?: return@withContext null
         val seg = ctd.segment(sourceBitmap) ?: return@withContext null
         val w = sourceBitmap.width; val h = sourceBitmap.height
-        val active = bubbles.filter { it.visible && !it.isNonBalloon }
+        val active = bubbles.filter { it.visible && !it.isNonBalloon && !it.isRestored }
         if (active.isEmpty()) return@withContext sourceBitmap.copy(Bitmap.Config.ARGB_8888, true)
         val boxes = active.map { floatArrayOf(it.x1, it.y1, it.x2, it.y2) }
         val srcPx = IntArray(w * h)

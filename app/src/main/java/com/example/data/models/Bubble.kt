@@ -9,6 +9,20 @@ enum class TextClass {
     SKIP
 }
 
+/**
+ * Per-unit processing state, carried on the unit record and persisted in
+ * the same bubblesJson store (prompt 20261118, Part 3). The final page is
+ * always re-derived from the original plus this state: a RESTORED unit is
+ * excluded from wipe and typeset, so its original art and Japanese are
+ * what the derivation leaves in place — restore never paints over the
+ * typeset result.
+ */
+enum class UnitState {
+    PROCESSED,
+    SKIPPED,
+    RESTORED
+}
+
 data class Bubble(
     val id: Int,
     val text: String, // Source Japanese text
@@ -18,7 +32,8 @@ data class Bubble(
     var fontSizeSp: Float = 14f,
     var visible: Boolean = true,
     val type: String = "bubble", // "bubble", "narration", "floating", "side_text"
-    val textClass: TextClass = TextClass.DIALOGUE
+    val textClass: TextClass = TextClass.DIALOGUE,
+    val unitState: UnitState = UnitState.PROCESSED
 ) {
     val x1: Float get() = box.getOrNull(0)?.coerceIn(0f, 1f) ?: 0f
     val y1: Float get() = box.getOrNull(1)?.coerceIn(0f, 1f) ?: 0f
@@ -39,6 +54,10 @@ data class Bubble(
     val isNonBalloon: Boolean
         get() = type.lowercase() in NON_BALLOON_TYPES || textClass == TextClass.SKIP
 
+    /** A unit the Commander restored by tap: excluded from wipe and typeset on every re-derivation. */
+    val isRestored: Boolean
+        get() = unitState == UnitState.RESTORED
+
     fun toJson(): JSONObject {
         return JSONObject().apply {
             put("id", id)
@@ -53,6 +72,10 @@ data class Bubble(
             put("type", type)
             if (textClass != TextClass.DIALOGUE) {
                 put("textClass", textClass.name)
+            }
+            // Absent = PROCESSED, so pre-Part-3 stores keep parsing identically.
+            if (unitState != UnitState.PROCESSED) {
+                put("unitState", unitState.name)
             }
         }
     }
@@ -108,6 +131,10 @@ data class Bubble(
             val textClass = TextClass.entries.find { it.name.equals(textClassRaw, ignoreCase = true) }
                 ?: TextClass.DIALOGUE
 
+            val unitStateRaw = json.optString("unitState", "")
+            val unitState = UnitState.entries.find { it.name.equals(unitStateRaw, ignoreCase = true) }
+                ?: if (textClass == TextClass.SKIP) UnitState.SKIPPED else UnitState.PROCESSED
+
             return Bubble(
                 id = id,
                 text = text,
@@ -117,7 +144,8 @@ data class Bubble(
                 fontSizeSp = fontSizeSp,
                 visible = visible,
                 type = type,
-                textClass = textClass
+                textClass = textClass,
+                unitState = unitState
             )
         }
 

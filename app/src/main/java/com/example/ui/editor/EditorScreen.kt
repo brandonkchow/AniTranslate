@@ -62,6 +62,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -92,6 +93,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.example.data.models.Bubble
+import com.example.data.models.UnitState
 import com.example.ui.theme.EditorialCanvas
 import com.example.ui.theme.EditorialCrimson
 import com.example.ui.theme.EditorialCrimsonLight
@@ -135,6 +137,11 @@ fun EditorScreen(
     // Zoom & Pan transforms
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
+
+    // Tap-to-restore action sheet (prompt 20261118, Part 3): a tap selects the
+    // unit and opens the sheet; the inline edit card appears only via Edit text.
+    var actionSheetBubbleId by remember { mutableStateOf<Int?>(null) }
+    var editingBubble by remember { mutableStateOf(false) }
 
     val transformState = rememberTransformableState { zoomChange, panChange, _ ->
         scale = (scale * zoomChange).coerceIn(1f, 5f)
@@ -292,17 +299,17 @@ fun EditorScreen(
                     }
                 }
 
-                // If a bubble is selected, show edit bar
+                // If a bubble is selected for editing, show edit bar
                 val selected = uiState.selectedBubble
-                if (selected != null) {
+                if (selected != null && editingBubble) {
                     Spacer(modifier = Modifier.height(8.dp))
                     BubbleEditInlineCard(
                         bubble = selected,
                         onUpdateText = { viewModel.updateBubbleText(selected.id, it) },
                         onFontSizeChange = { delta -> viewModel.adjustFontSize(selected.id, delta) },
                         onToggleVisibility = { viewModel.toggleBubbleVisibility(selected.id) },
-                        onDelete = { viewModel.deleteBubble(selected.id) },
-                        onClose = { viewModel.selectBubble(null) }
+                        onDelete = { viewModel.deleteBubble(selected.id); editingBubble = false },
+                        onClose = { viewModel.selectBubble(null); editingBubble = false }
                     )
                 }
             }
@@ -328,26 +335,20 @@ fun EditorScreen(
                 val containerWidth = constraints.maxWidth.toFloat()
                 val containerHeight = constraints.maxHeight.toFloat()
 
-                // Render current image
+                // Render current image. Cache key carries the file's mtime:
+                // re-renders overwrite the same cache path, and Coil would
+                // otherwise keep serving the pre-edit bitmap.
                 if (uiState.currentImageFile != null && uiState.currentImageFile!!.exists()) {
+                    val imageFile = uiState.currentImageFile!!
                     AsyncImage(
-                        model = uiState.currentImageFile,
+                        model = coil.request.ImageRequest.Builder(LocalContext.current)
+                            .data(imageFile)
+                            .memoryCacheKey("${imageFile.absolutePath}:${imageFile.lastModified()}")
+                            .diskCacheKey("${imageFile.absolutePath}:${imageFile.lastModified()}")
+                            .build(),
                         contentDescription = "Manga Page Canvas",
                         contentScale = ContentScale.Fit,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .pointerInput(Unit) {
-                                detectTapGestures { tapOffset ->
-                                    // Hit test bubbles
-                                    val relX = tapOffset.x / containerWidth
-                                    val relY = tapOffset.y / containerHeight
-
-                                    val hit = uiState.bubbles.find { b ->
-                                        relX in b.x1..b.x2 && relY in b.y1..b.y2
-                                    }
-                                    viewModel.selectBubble(hit?.id)
-                                }
-                            }
+                        modifier = Modifier.fillMaxSize()
                     )
                 }
 
@@ -425,6 +426,28 @@ fun EditorScreen(
                         }
                     }
                 }
+
+                // Tap hit-test layer, topmost in the canvas (Part 3): the
+                // bubble overlays above the image swallow taps before the
+                // image's own handler ever sees them, so selection lives
+                // here. Only taps are consumed; drags fall through to the
+                // selected bubble's move/resize handlers below.
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(uiState.bubbles) {
+                            detectTapGestures { tapOffset ->
+                                val relX = tapOffset.x / containerWidth
+                                val relY = tapOffset.y / containerHeight
+                                val hit = uiState.bubbles.find { b ->
+                                    relX in b.x1..b.x2 && relY in b.y1..b.y2
+                                }
+                                viewModel.selectBubble(hit?.id)
+                                editingBubble = false
+                                actionSheetBubbleId = hit?.id
+                            }
+                        }
+                )
             }
 
             // Local re-rendering progress indicator
@@ -445,6 +468,51 @@ fun EditorScreen(
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Re-rendering...", color = EditorialTextPrimary, fontSize = 12.sp)
                     }
+                }
+            }
+        }
+    }
+
+    // One action sheet per tapped unit: Restore original (or Re-process when
+    // already restored) and Edit text. Restoring re-derives the page from
+    // the original with this unit excluded from wipe + typeset.
+    actionSheetBubbleId?.let { sheetId ->
+        val sheetBubble = uiState.bubbles.find { it.id == sheetId }
+        if (sheetBubble != null) {
+            ModalBottomSheet(
+                onDismissRequest = { actionSheetBubbleId = null },
+                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+            ) {
+                Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp)) {
+                    Text(
+                        text = "Bubble #${sheetBubble.id} — ${sheetBubble.unitState.name.lowercase()}",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    if (sheetBubble.unitState == UnitState.RESTORED) {
+                        Button(
+                            onClick = { viewModel.reprocessBubble(sheetBubble.id); actionSheetBubbleId = null },
+                            modifier = Modifier.fillMaxWidth().testTag("reprocess_unit"),
+                            colors = ButtonDefaults.buttonColors(containerColor = EditorialLavender, contentColor = EditorialDeepViolet)
+                        ) { Text("Re-process") }
+                    } else {
+                        Button(
+                            onClick = { viewModel.restoreBubble(sheetBubble.id); actionSheetBubbleId = null },
+                            modifier = Modifier.fillMaxWidth().testTag("restore_original"),
+                            colors = ButtonDefaults.buttonColors(containerColor = EditorialLavender, contentColor = EditorialDeepViolet)
+                        ) { Text("Restore original") }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { editingBubble = true; actionSheetBubbleId = null },
+                        modifier = Modifier.fillMaxWidth().testTag("edit_text")
+                    ) { Text("Edit text") }
+                    TextButton(
+                        onClick = { actionSheetBubbleId = null },
+                        modifier = Modifier.fillMaxWidth().testTag("unit_sheet_cancel")
+                    ) { Text("Cancel") }
+                    Spacer(modifier = Modifier.height(16.dp))
                 }
             }
         }

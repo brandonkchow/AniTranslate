@@ -100,7 +100,7 @@ object WipeGate {
         val maxGlyphH = maxOf(32, (h * 0.08f).toInt())
         val out = mutableListOf<CoverageFlag>()
         for (b in bubbles) {
-            if (!b.visible || b.isNonBalloon) continue
+            if (!b.visible || b.isNonBalloon || b.isRestored) continue
             val (x1, y1, x2, y2) = boxPx(b, w, h)
             if (x2 <= x1 || y2 <= y1) continue
             val bw = x2 - x1; val bh = y2 - y1

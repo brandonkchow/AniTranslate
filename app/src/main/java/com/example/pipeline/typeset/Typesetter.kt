@@ -113,7 +113,8 @@ object Typesetter {
 
             // Out-of-scope types only (side_text). Free text (floating, detector
             // text_free) is typeset inside its own extent box (BACKLOG:13).
-            if (bubble.isNonBalloon) continue
+            // A RESTORED unit keeps its original Japanese: never drawn over.
+            if (bubble.isNonBalloon || bubble.isRestored) continue
 
             val rawText = bubble.translated.ifBlank { bubble.text }
             if (rawText.isBlank()) continue

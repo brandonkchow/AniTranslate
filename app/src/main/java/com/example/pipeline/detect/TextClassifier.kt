@@ -2,6 +2,7 @@ package com.example.pipeline.detect
 
 import com.example.data.models.Bubble
 import com.example.data.models.TextClass
+import com.example.data.models.UnitState
 
 /**
  * Classifies detected text regions into [TextClass.SKIP], [TextClass.INFO], or
@@ -69,7 +70,17 @@ object TextClassifier {
     }
 
     fun classifyAll(bubbles: List<Bubble>): List<Bubble> =
-        bubbles.map { it.copy(textClass = classify(it)) }
+        bubbles.map {
+            val textClass = classify(it)
+            // Classification runs once at detect. A RESTORED state set by the
+            // Commander survives re-classification; anything else mirrors it.
+            val unitState = when {
+                it.unitState == UnitState.RESTORED -> UnitState.RESTORED
+                textClass == TextClass.SKIP -> UnitState.SKIPPED
+                else -> UnitState.PROCESSED
+            }
+            it.copy(textClass = textClass, unitState = unitState)
+        }
 
     private fun hasSpeechPunctuation(text: String): Boolean =
         text.any { it in SPEECH_PUNCTUATION }

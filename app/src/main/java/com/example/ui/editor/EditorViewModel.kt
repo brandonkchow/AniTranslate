@@ -9,6 +9,8 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.db.AppDatabase
 import com.example.data.db.PageEntity
 import com.example.data.models.Bubble
+import com.example.data.models.TextClass
+import com.example.data.models.UnitState
 import com.example.pipeline.image.ImageScaler
 import com.example.pipeline.typeset.Typesetter
 import com.example.pipeline.wipe.FlatWiper
@@ -96,6 +98,31 @@ class EditorViewModel(
 
     fun selectBubble(id: Int?) {
         _uiState.value = _uiState.value.copy(selectedBubbleId = id)
+    }
+
+    /**
+     * Tap-to-restore (prompt 20261118, Part 3): marks the unit RESTORED and
+     * re-derives the final page from the original. The unit is excluded
+     * from wipe and typeset, so the Japanese comes back exactly as drawn.
+     * State rides the existing bubblesJson store via [reRenderLocally].
+     */
+    fun restoreBubble(id: Int) {
+        val updated = _uiState.value.bubbles.map {
+            if (it.id == id) it.copy(unitState = UnitState.RESTORED) else it
+        }
+        _uiState.value = _uiState.value.copy(bubbles = updated)
+        reRenderLocally()
+    }
+
+    /** Inverse of [restoreBubble]: the unit alone re-enters wipe + typeset. */
+    fun reprocessBubble(id: Int) {
+        val updated = _uiState.value.bubbles.map {
+            if (it.id == id) it.copy(
+                unitState = if (it.textClass == TextClass.SKIP) UnitState.SKIPPED else UnitState.PROCESSED
+            ) else it
+        }
+        _uiState.value = _uiState.value.copy(bubbles = updated)
+        reRenderLocally()
     }
 
     fun updateBubbleText(id: Int, newTranslated: String) {
