@@ -51,7 +51,13 @@ class LamaFiller private constructor(private val session: OrtSession) {
                 val msk = FloatArray(SIZE * SIZE)
                 for (y in 0 until SIZE) for (x in 0 until SIZE) {
                     val p = cpx[y * SIZE + x]; val o = y * SIZE + x
-                    img[o] = Color.red(p).toFloat(); img[SIZE * SIZE + o] = Color.green(p).toFloat(); img[2 * SIZE * SIZE + o] = Color.blue(p).toFloat()
+                    // This LaMa export takes the image normalized to 0..1 and
+                    // returns 0..255 (verified on desktop against the raw-255
+                    // feed, 2026-11-22): feeding 0..255 saturates most of the
+                    // crop to white but blows isolated erased pixels out to
+                    // (255,x,255) / (255,255,x) specks — the pink/yellow dots
+                    // the Commander failed the Step 1 set for.
+                    img[o] = Color.red(p) / 255f; img[SIZE * SIZE + o] = Color.green(p) / 255f; img[2 * SIZE * SIZE + o] = Color.blue(p) / 255f
                     // Map the 512 cell back to the page erase mask.
                     val px = cx1 + (x * cw / SIZE); val py = cy1 + (y * ch / SIZE)
                     msk[o] = if (px in 0 until w && py in 0 until h && erase[py * w + px]) 1f else 0f
