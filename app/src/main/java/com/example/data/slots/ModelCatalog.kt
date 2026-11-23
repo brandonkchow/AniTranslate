@@ -479,9 +479,9 @@ object ModelCatalogMigration {
         "llama-3.3-70b-versatile" to "openai/gpt-oss-120b",
         "llama-3.1-8b-instant" to "openai/gpt-oss-120b",
         "gemma2-9b-it" to "openai/gpt-oss-20b",
-        "meta-llama/llama-3.3-70b-instruct:free" to "google/gemma-4-31b-it:free",
-        "google/gemini-2.0-flash-exp:free" to "google/gemma-4-31b-it:free",
-        "qwen/qwen-2.5-vl-72b-instruct:free" to "google/gemma-4-31b-it:free",
-        "deepseek/deepseek-chat:free" to "nvidia/nemotron-3-super-120b-a12b:free"
+        "meta-llama/llama-3.3-70b-instruct:free" to "nvidia/nemotron-3.5-super-vl:free",
+        "google/gemini-2.0-flash-exp:free" to "nvidia/nemotron-3.5-super-vl:free",
+        "qwen/qwen-2.5-vl-72b-instruct:free" to "nvidia/nemotron-3.5-super-vl:free",
+        "deepseek/deepseek-chat:free" to "nvidia/nemotron-3.5-super-vl:free"
     )
 }
