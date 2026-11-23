@@ -251,6 +251,16 @@ class TapRestoreDemoTest {
         val origBmp = env.origBmp
         val vm = env.vm
 
+        composeRule.waitUntil(timeoutMillis = 15_000) {
+            try {
+                composeRule.onNodeWithContentDescription("Manga Page Canvas").assertExists()
+                vm.uiState.value.bubbles.isNotEmpty()
+            } catch (e: AssertionError) {
+                false
+            }
+        }
+        composeRule.waitForIdle()
+        Thread.sleep(3_500)
         shot(outDir, "editor_after_boxes.png")
 
         // (0.53, 0.349) lies inside both unit 7 (large title box) and unit 9 (smaller nested bubble).
