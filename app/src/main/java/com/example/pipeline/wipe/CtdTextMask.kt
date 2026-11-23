@@ -14,7 +14,8 @@ import java.nio.FloatBuffer
  *
  * This is the learned mask that replaced the hand-written component rule
  * (closed after three measured failures, Commander 2026-11-18). The model
- * ships in assets (94.7 MB full precision). The dynamically-quantized int8
+ * downloads on first run via [CtdModelManager] (94.7 MB full precision).
+ * It is never bundled in assets. The dynamically-quantized int8
  * form is NOT used: ONNX Runtime Android refuses to load it
  * (ORT_NOT_IMPLEMENTED, ConvInteger) — proven in the 2026-11-22 emulator
  * proof, rendered-pages/mask-wipe-step0-20261122/STEP0.md.
@@ -68,15 +69,19 @@ class CtdTextMask private constructor(private val session: OrtSession) {
 
     companion object {
         private const val TAG = "CtdTextMask"
-        const val ASSET_NAME = "models/comic-text-detector.onnx"
 
         @Volatile private var instance: CtdTextMask? = null
 
+        /**
+         * Session over the downloaded model file, or null when the file is
+         * missing, unreadable, or corrupt. Failures are never cached, so a
+         * later download can still succeed in the same process.
+         */
         fun getInstance(context: Context): CtdTextMask? {
             instance?.let { return it }
             return synchronized(this) {
                 instance ?: try {
-                    val bytes = context.assets.open(ASSET_NAME).use { it.readBytes() }
+                    val bytes = CtdModelManager.getInstance(context).modelFile.readBytes()
                     val opts = OrtSession.SessionOptions().apply {
                         setIntraOpNumThreads(4)
                         setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
@@ -89,5 +94,17 @@ class CtdTextMask private constructor(private val session: OrtSession) {
                 }
             }
         }
+
+        /** Drops the cached session so a re-downloaded file is never stale. */
+        fun invalidate() {
+            synchronized(this) {
+                try { instance?.close() } catch (_: Throwable) { }
+                instance = null
+            }
+        }
+    }
+
+    private fun close() {
+        try { session.close() } catch (_: Throwable) { }
     }
 }

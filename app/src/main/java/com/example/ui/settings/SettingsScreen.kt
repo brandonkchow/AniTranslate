@@ -137,6 +137,7 @@ fun SettingsScreen(
     val baberuState by viewModel.baberuState.collectAsStateWithLifecycle()
     val wipeTierMode by viewModel.wipeTierMode.collectAsStateWithLifecycle()
     val lamaState by viewModel.lamaState.collectAsStateWithLifecycle()
+    val ctdState by viewModel.ctdState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
     var showAddSlotDialog by remember { mutableStateOf(false) }
@@ -424,7 +425,7 @@ fun SettingsScreen(
                         com.example.pipeline.wipe.WipeTierMode.AUTO to
                             ("Auto (recommended)" to "Best quality when this device can run it, Standard otherwise."),
                         com.example.pipeline.wipe.WipeTierMode.STANDARD to
-                            ("Standard" to "Mask + nearest-colour fill. Bundled with the app, works on every phone."),
+                            ("Standard" to "Mask + nearest-colour fill. Works on every phone; needs the 95 MB detector download below."),
                         com.example.pipeline.wipe.WipeTierMode.BEST to
                             ("Best quality" to "Mask + LaMa model fill. Needs the optional 208 MB model download below.")
                     ).forEach { (mode, texts) ->
@@ -480,6 +481,38 @@ fun SettingsScreen(
                             lamaState !is com.example.pipeline.wipe.InpaintModelManager.State.Downloading
                         ) {
                             OutlinedButton(onClick = { viewModel.downloadLamaModel() }) {
+                                Text("Download")
+                            }
+                        }
+                    }
+
+                    // Required CTD mask model for the wipe (both tiers).
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Comic text detector (required for wipe)",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = EditorialTextPrimary
+                            )
+                            Text(
+                                text = when (val s = ctdState) {
+                                    is com.example.pipeline.wipe.CtdModelManager.State.Ready -> "Downloaded (95 MB)"
+                                    is com.example.pipeline.wipe.CtdModelManager.State.Downloading -> "Downloading ${(s.progress * 100).toInt()}%"
+                                    is com.example.pipeline.wipe.CtdModelManager.State.Failed -> "Download failed: ${s.message}"
+                                    else -> "Not downloaded (95 MB, required)"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = EditorialTextMuted
+                            )
+                        }
+                        if (ctdState !is com.example.pipeline.wipe.CtdModelManager.State.Ready &&
+                            ctdState !is com.example.pipeline.wipe.CtdModelManager.State.Downloading
+                        ) {
+                            OutlinedButton(onClick = { viewModel.downloadCtdModel() }) {
                                 Text("Download")
                             }
                         }

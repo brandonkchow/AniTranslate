@@ -302,6 +302,18 @@ fun EditorScreen(
                     }
                 }
 
+                // Coverage warning (BACKLOG:803): flagged-bubble count from
+                // the latest re-render, shown even at 0. Tapping does nothing.
+                uiState.coverageFlagCount?.let { count ->
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "$count bubbles may still contain Japanese",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = EditorialTextMuted,
+                        modifier = Modifier.testTag("coverage_warning")
+                    )
+                }
+
                 // If a bubble is selected for editing, show edit bar
                 val selected = uiState.selectedBubble
                 if (selected != null && editingBubble) {

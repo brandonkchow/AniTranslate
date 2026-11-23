@@ -79,6 +79,14 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch { inpaintModelManager.download() }
     }
 
+    private val ctdModelManager = com.example.pipeline.wipe.CtdModelManager.getInstance(application)
+
+    val ctdState: StateFlow<com.example.pipeline.wipe.CtdModelManager.State> = ctdModelManager.state
+
+    fun downloadCtdModel() {
+        viewModelScope.launch { ctdModelManager.download() }
+    }
+
     private val _testResults = MutableStateFlow<Map<String, SlotTestResult>>(emptyMap())
     val testResults: StateFlow<Map<String, SlotTestResult>> = _testResults.asStateFlow()
 

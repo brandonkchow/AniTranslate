@@ -6,6 +6,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.example.data.models.Bubble
 import com.example.pipeline.detect.TextClassifier
+import com.example.pipeline.wipe.CtdModelManager
 import com.example.pipeline.wipe.InpaintModelManager
 import com.example.pipeline.wipe.MaskWiper
 import com.example.pipeline.wipe.WipeGate
@@ -52,6 +53,12 @@ class MaskWipeRenderTest {
             val manager = InpaintModelManager.getInstance(ctx)
             manager.modelDir.mkdirs()
             File(lamaPath).copyTo(manager.modelFile, overwrite = true)
+        }
+
+        args.getString("ctd")?.let { ctdPath ->
+            val manager = CtdModelManager.getInstance(ctx)
+            manager.modelDir.mkdirs()
+            File(ctdPath).copyTo(manager.modelFile, overwrite = true)
         }
 
         val bmp = BitmapFactory.decodeFile(pagePath) ?: error("cannot decode $pagePath")

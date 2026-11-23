@@ -13,7 +13,6 @@ import com.example.data.models.TextClass
 import com.example.data.models.UnitState
 import com.example.pipeline.image.ImageScaler
 import com.example.pipeline.typeset.Typesetter
-import com.example.pipeline.wipe.FlatWiper
 import com.example.utils.MediaStoreExporter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -42,7 +41,9 @@ data class EditorUiState(
     val isRendering: Boolean = false,
     val isExporting: Boolean = false,
     val allPagesInJob: List<PageEntity> = emptyList(),
-    val currentImageFile: File? = null
+    val currentImageFile: File? = null,
+    /** Flagged-bubble count from the latest re-render; null until the first one completes. */
+    val coverageFlagCount: Int? = null
 ) {
     val selectedBubble: Bubble?
         get() = bubbles.find { it.id == selectedBubbleId }
@@ -190,9 +191,20 @@ class EditorViewModel(
                 val context = getApplication<Application>()
                 val origBmp = ImageScaler.loadBitmapFromFile(origFile) ?: return@withContext
 
-                // Wipe: mask wipe first (Step 1), component wipe as fallback.
-                val wipedBmp = com.example.pipeline.wipe.MaskWiper.wipeBubbles(context, origBmp, bubbles)
-                    ?: FlatWiper.wipeBubbles(origBmp, bubbles)
+                // Wipe: mask wipe only; null fails closed with the named
+                // message and aborts the re-render, keeping prior state.
+                val wipedBmp = com.example.pipeline.wipe.MaskWiper.wipeBubbles(context, origBmp, bubbles) ?: run {
+                    _uiState.value = _uiState.value.copy(isRendering = false)
+                    _eventFlow.emit(EditorEvent.ShowMessage(com.example.pipeline.wipe.CtdModelManager.UNAVAILABLE_MESSAGE))
+                    return@withContext
+                }
+
+                // Coverage: flag bubbles that may still hold Japanese.
+                val w = origBmp.width; val h = origBmp.height
+                val origPx = IntArray(w * h); origBmp.getPixels(origPx, 0, w, 0, 0, w, h)
+                val wipedPx = IntArray(w * h); wipedBmp.getPixels(wipedPx, 0, w, 0, 0, w, h)
+                val coverageFlagCount = flaggedBubbleCount(origPx, wipedPx, w, h, bubbles)
+
                 val wipedFile = File(context.cacheDir, "wiped_${page.id}.png")
                 ImageScaler.saveBitmapPng(wipedBmp, wipedFile)
 
@@ -221,7 +233,8 @@ class EditorViewModel(
                 _uiState.value = _uiState.value.copy(
                     page = updatedPage,
                     currentImageFile = activeFile,
-                    isRendering = false
+                    isRendering = false,
+                    coverageFlagCount = coverageFlagCount
                 )
             }
         }
@@ -274,6 +287,18 @@ class EditorViewModel(
         }
     }
 }
+
+/**
+ * Bubbles the shipped [com.example.pipeline.wipe.WipeGate.coverageFlags]
+ * flags on this re-render — bubble count, not component count.
+ */
+internal fun flaggedBubbleCount(
+    original: IntArray,
+    wiped: IntArray,
+    w: Int,
+    h: Int,
+    bubbles: List<Bubble>
+): Int = com.example.pipeline.wipe.WipeGate.coverageFlags(original, wiped, w, h, bubbles).size
 
 sealed class EditorEvent {
     data class ShowMessage(val message: String) : EditorEvent()

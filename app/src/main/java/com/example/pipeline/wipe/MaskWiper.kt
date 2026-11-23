@@ -11,9 +11,9 @@ import kotlinx.coroutines.withContext
 /**
  * Learned-mask wipe: the Step 1 integration of the proven CTD mask
  * (prompt 20261118). Replaces [FlatWiper]'s component rule as the
- * pipeline's wipe when it can run; the caller falls back to FlatWiper
- * when the CTD model cannot load or segment, so a model failure degrades
- * to the previous behaviour instead of failing the page.
+ * pipeline's wipe when it can run. The CTD model downloads on first
+ * need; when it still cannot load or segment, the wipe returns null and
+ * the caller fails closed with the named unavailable message.
  *
  * Both tiers share the same mask and the same composite contract:
  * original everywhere, fill only inside the erase mask.
@@ -39,7 +39,7 @@ object MaskWiper {
     /**
      * Wipe [sourceBitmap] for [bubbles]. Returns null when the mask path
      * cannot run at all (model load or segmentation failure); a null
-     * means "fall back", never a partially wiped page.
+     * means "fail closed", never a partially wiped page.
      */
     suspend fun wipeBubbles(
         context: Context,
@@ -47,6 +47,8 @@ object MaskWiper {
         bubbles: List<Bubble>,
         tierOverride: WipeTier? = null
     ): Bitmap? = withContext(Dispatchers.Default) {
+        val ctdManager = CtdModelManager.getInstance(context)
+        if (!ctdManager.isDownloaded) ctdManager.download()
         val ctd = CtdTextMask.getInstance(context) ?: return@withContext null
         val seg = ctd.segment(sourceBitmap) ?: return@withContext null
         val w = sourceBitmap.width; val h = sourceBitmap.height

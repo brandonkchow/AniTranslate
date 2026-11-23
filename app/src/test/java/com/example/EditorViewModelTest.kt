@@ -3,6 +3,7 @@ package com.example
 import com.example.data.models.Bubble
 import com.example.ui.editor.EditorUiState
 import com.example.ui.editor.ViewMode
+import com.example.ui.editor.flaggedBubbleCount
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -83,6 +84,30 @@ class EditorViewModelTest {
         assertEquals(1, afterDelete.size)
         assertEquals(2, afterDelete.bubbles[0].id)
         assertNull(afterDelete.selectedBubbleId)
+    }
+
+    @Test
+    fun flaggedBubbleCountRemainingGlyphCountsOne() {
+        val w = 200; val h = 200
+        val bubble = Bubble(id = 1, text = "あ", box = listOf(0.1f, 0.1f, 0.5f, 0.5f))
+        // Dark glyph-shaped 5x5 block inside the unit box (px 20..100),
+        // clear of the box edges.
+        val original = IntArray(w * h) { WHITE }
+        for (y in 40 until 45) for (x in 40 until 45) original[y * w + x] = BLACK
+        // Still there after the wipe: 1 flagged bubble.
+        assertEquals(1, flaggedBubbleCount(original, original.copyOf(), w, h, listOf(bubble)))
+        // Wiped away: 0.
+        assertEquals(0, flaggedBubbleCount(original, IntArray(w * h) { WHITE }, w, h, listOf(bubble)))
+    }
+
+    @Test
+    fun coverageFlagCountUnsetUntilFirstRender() {
+        assertNull(EditorUiState().coverageFlagCount)
+    }
+
+    companion object {
+        private const val BLACK = -16777216 // 0xFF000000
+        private const val WHITE = -1 // 0xFFFFFFFF
     }
 }
 private val EditorUiState.size: Int get() = bubbles.size

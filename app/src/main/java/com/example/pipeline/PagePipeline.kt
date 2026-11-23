@@ -29,7 +29,6 @@ import com.example.pipeline.router.PipelineStage
 import com.example.pipeline.translate.SpaceAwareRetry
 import com.example.pipeline.typeset.BubbleBudget
 import com.example.pipeline.typeset.Typesetter
-import com.example.pipeline.wipe.FlatWiper
 import com.example.utils.RunLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -645,12 +644,15 @@ class PagePipeline(
         }
 
         // Mask wipe (Step 1, prompt 20261118): learned CTD mask, tier from
-        // settings. Null means the mask path cannot run; fall back to the
-        // component wipe rather than failing the page.
-        val wipedBmp = com.example.pipeline.wipe.MaskWiper.wipeBubbles(context, origBmp, bubbles)
-            ?: FlatWiper.wipeBubbles(origBmp, bubbles).also {
-                RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "WIPE_FALLBACK", "Mask wipe unavailable, component wipe used")
-            }
+        // settings. Null means the mask path cannot run; fail the page
+        // closed with the named message, never a silent component fallback.
+        val wipedBmp = com.example.pipeline.wipe.MaskWiper.wipeBubbles(context, origBmp, bubbles) ?: run {
+            val msg = com.example.pipeline.wipe.CtdModelManager.UNAVAILABLE_MESSAGE
+            currentPage = currentPage.copy(status = PageStatus.FAILED, errorMessage = msg)
+            RunLogger.logPageEvent(context, currentPage.jobId, currentPage.pageIndex, "ERROR", "Wipe failed: $msg")
+            onStatusUpdate(currentPage)
+            return@withContext currentPage
+        }
         val wipedFile = File(context.cacheDir, "wiped_${currentPage.id}.png")
         ImageScaler.saveBitmapPng(wipedBmp, wipedFile)
         currentPage = currentPage.copy(wipedImagePath = wipedFile.absolutePath)

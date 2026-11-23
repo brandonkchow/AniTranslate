@@ -21,6 +21,7 @@ import com.example.data.models.UnitState
 import com.example.pipeline.detect.TextClassifier
 import com.example.pipeline.image.ImageScaler
 import com.example.pipeline.typeset.Typesetter
+import com.example.pipeline.wipe.CtdModelManager
 import com.example.pipeline.wipe.MaskWiper
 import com.example.ui.editor.EditorScreen
 import com.example.ui.editor.EditorViewModel
@@ -79,6 +80,11 @@ class TapRestoreDemoTest {
         val bubbles = TextClassifier.classifyAll(Bubble.parseListFromJson(bubblesJson))
         val origFile = File(base, "all11/pages/page-09.png")
         val origBmp = BitmapFactory.decodeFile(origFile.absolutePath)
+        InstrumentationRegistry.getArguments().getString("ctd")?.let { ctdPath ->
+            val manager = CtdModelManager.getInstance(ctx)
+            manager.modelDir.mkdirs()
+            File(ctdPath).copyTo(manager.modelFile, overwrite = true)
+        }
         val wiped = runBlocking { MaskWiper.wipeBubbles(ctx, origBmp, bubbles) }!!
         val wipedFile = File(outDir, "orig_wiped.png"); runBlocking { ImageScaler.saveBitmapPng(wiped, wipedFile) }
         val finalBmp = runBlocking { Typesetter.typesetBubbles(ctx, wiped, bubbles).bitmap }
