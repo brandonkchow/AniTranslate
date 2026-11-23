@@ -71,6 +71,23 @@ class MaskCompositeTest {
     }
 
     @Test
+    fun interiorComponentMaskTakesDashSparesEdgeAndArt() {
+        val w = 200; val h = 1000
+        val px = IntArray(w * h) { gray(255) }
+        fun fill(x1: Int, y1: Int, x2: Int, y2: Int) {
+            for (y in y1 until y2) for (x in x1 until x2) px[y * w + x] = gray(0)
+        }
+        fill(100, 150, 102, 227) // thin vertical dash, interior (2x77)
+        fill(80, 100, 83, 300)   // touches the box's left edge (x=80)
+        fill(90, 700, 150, 760)  // art-sized interior blob (60x60 > glyph cap on width)
+        val box = listOf(floatArrayOf(0.4f, 0.1f, 0.9f, 0.9f)) // x 80..180, y 100..900
+        val mask = MaskComposite.interiorComponentMask(px, w, h, box)
+        assertTrue("dash must be erased", mask[180 * w + 101])
+        assertFalse("edge-touching ink must survive", mask[200 * w + 81])
+        assertFalse("art-sized blob must survive", mask[730 * w + 120])
+    }
+
+    @Test
     fun tierResolutionHonoursModeAndCapability() {
         assertEquals(WipeTier.STANDARD, WipeTierStore.resolve(WipeTierMode.STANDARD, 12_000, true))
         assertEquals(WipeTier.BEST, WipeTierStore.resolve(WipeTierMode.BEST, 2_000, false))

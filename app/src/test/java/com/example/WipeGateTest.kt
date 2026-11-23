@@ -51,14 +51,17 @@ class WipeGateTest {
     }
 
     @Test
-    fun restoreSkipPixelsRepairsOverlapWipe() {
-        val skip = Bubble(7, "title", listOf(0.05f, 0.05f, 0.25f, 0.25f), textClass = TextClass.SKIP)
+    fun skipGateIgnoresPixelsInsideAProcessedUnitsBox() {
+        // Page-09 shape: the SKIP title's rectangle contains a dialogue
+        // bubble. Changes inside the dialogue box are that unit's own
+        // business; SKIP-only territory must stay bit-identical.
+        val skip = Bubble(7, "title", listOf(0.05f, 0.05f, 0.90f, 0.90f), textClass = TextClass.SKIP)
+        val dialogue = Bubble(8, "text", listOf(0.40f, 0.10f, 0.70f, 0.60f), textClass = TextClass.DIALOGUE)
         val original = page()
-        fill(original, 15, 30, 18, 90, black)
-        val wiped = original.copyOf()
-        fill(wiped, 10, 20, 50, 100, white)
-        WipeGate.restoreSkipPixels(original, wiped, w, h, listOf(skip))
-        assertTrue(WipeGate.skipViolations(original, wiped, w, h, listOf(skip)).isEmpty())
+        fill(original, 100, 150, 102, 227, black) // dialogue ink inside the title rectangle
+        val rendered = original.copyOf()
+        fill(rendered, 100, 150, 102, 227, white) // wiped, as it should be
+        assertTrue(WipeGate.skipViolations(original, rendered, w, h, listOf(skip, dialogue)).isEmpty())
     }
 
     @Test

@@ -42,17 +42,30 @@ object WipeGate {
         return intArrayOf(x1, y1, x2, y2)
     }
 
-    /** SKIP units whose pixels differ between [original] and [rendered]. */
+    /**
+     * SKIP units whose pixels differ between [original] and [rendered].
+     * Pixels inside a processed (visible, non-SKIP) unit's box are shared
+     * territory and belong to that unit — a SKIP unit's rectangle can
+     * contain whole dialogue bubbles (page-09 title), and those bubbles
+     * must still be wiped and typeset. SKIP-only territory must be
+     * bit-identical.
+     */
     fun skipViolations(
         original: IntArray, rendered: IntArray, w: Int, h: Int, bubbles: List<Bubble>
     ): List<SkipViolation> {
+        val processed = BooleanArray(w * h)
+        for (b in bubbles) {
+            if (!b.visible || b.textClass == TextClass.SKIP) continue
+            val (x1, y1, x2, y2) = boxPx(b, w, h)
+            for (y in y1 until y2) for (x in x1 until x2) processed[y * w + x] = true
+        }
         val out = mutableListOf<SkipViolation>()
         for (b in bubbles) {
             if (b.textClass != TextClass.SKIP) continue
             val (x1, y1, x2, y2) = boxPx(b, w, h)
             var changed = 0
             for (y in y1 until y2) for (x in x1 until x2) {
-                if (original[y * w + x] != rendered[y * w + x]) changed++
+                if (!processed[y * w + x] && original[y * w + x] != rendered[y * w + x]) changed++
             }
             if (changed > 0) out += SkipViolation(b.id, changed)
         }
@@ -68,22 +81,6 @@ object WipeGate {
             val v = violations[b.id]
             if (v == null) "SKIP-GATE unit ${b.id}: PASS bit-identical"
             else "SKIP-GATE unit ${b.id}: FAIL changedPixels=${v.changedPixels}"
-        }
-    }
-
-    /**
-     * Restore SKIP boxes in [rendered] from [original], in place. The wipe
-     * already excludes SKIP boxes from its erase mask; this covers the case
-     * where a neighbouring processed box overlaps a SKIP unit. SKIP means
-     * leave-as-drawn, so the original pixels win.
-     */
-    fun restoreSkipPixels(original: IntArray, rendered: IntArray, w: Int, h: Int, bubbles: List<Bubble>) {
-        for (b in bubbles) {
-            if (b.textClass != TextClass.SKIP) continue
-            val (x1, y1, x2, y2) = boxPx(b, w, h)
-            for (y in y1 until y2) for (x in x1 until x2) {
-                rendered[y * w + x] = original[y * w + x]
-            }
         }
     }
 

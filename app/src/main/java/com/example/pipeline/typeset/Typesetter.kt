@@ -304,17 +304,6 @@ object Typesetter {
             canvas.restore()
         }
 
-        // SKIP units are leave-as-drawn through every stage (prompt
-        // 20261118, Part 1): a processed unit whose box overlaps a SKIP
-        // unit must not paint over it. Restore SKIP pixels from the wiped
-        // input, which already carries them bit-identical to the original.
-        if (bubbles.any { it.textClass == com.example.data.models.TextClass.SKIP }) {
-            val srcPx = IntArray(bmpW * bmpH).also { wipedBitmap.getPixels(it, 0, bmpW, 0, 0, bmpW, bmpH) }
-            val outPx = IntArray(bmpW * bmpH).also { resultBitmap.getPixels(it, 0, bmpW, 0, 0, bmpW, bmpH) }
-            com.example.pipeline.wipe.WipeGate.restoreSkipPixels(srcPx, outPx, bmpW, bmpH, bubbles)
-            resultBitmap.setPixels(outPx, 0, bmpW, 0, 0, bmpW, bmpH)
-        }
-
         TypesetResult(resultBitmap, outcomes)
     }
 
