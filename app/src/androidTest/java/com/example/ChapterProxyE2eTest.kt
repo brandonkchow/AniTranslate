@@ -50,7 +50,7 @@ class ChapterProxyE2eTest {
         private const val TAG = "ChapterProxyE2eTest"
 
         /** Host proxy as seen from the emulator. PM: raise the proxy `--call-cap` for a 55-page run. */
-        const val PROXY_BASE_URL = "http://10.0.2.2:8799"
+        const val PROXY_BASE_URL = "http://10.0.2.2:8799/v1"
 
         /** Proxy auth only — never a real provider key. */
         const val PROXY_API_KEY = "bulcan-local"
