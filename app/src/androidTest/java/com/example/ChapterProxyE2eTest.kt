@@ -79,7 +79,7 @@ class ChapterProxyE2eTest {
     fun chapterRidesPipelineToRenderedOutputThroughProxy() = runBlocking {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
-        val args = instrumentation.arguments
+        val args = InstrumentationRegistry.getArguments()
         val proxyBaseUrl = args.getString("proxyBaseUrl")?.takeIf { it.isNotBlank() } ?: PROXY_BASE_URL
 
         val slotStorage = SlotStorage.getInstance(context)
@@ -139,7 +139,7 @@ class ChapterProxyE2eTest {
         val dao = db.jobDao()
 
         // --- Collect page bytes: chapterDir arg, else one fixture page. ---
-        val args = InstrumentationRegistry.getInstrumentation().arguments
+        val args = InstrumentationRegistry.getArguments()
         val chapterDir = args.getString("chapterDir")?.takeIf { it.isNotBlank() }
         val pageSources: List<Pair<String, ByteArray>> = if (chapterDir != null) {
             val dir = File(chapterDir)
@@ -241,7 +241,7 @@ class ChapterProxyE2eTest {
                 page.errorMessage.isNotBlank())
         }
         if (donePages.isEmpty()) {
-            fail<Unit>("At least one page must be DONE; a 100%-failure chapter is not a pass " +
+            fail("At least one page must be DONE; a 100%-failure chapter is not a pass " +
                 "($summary; run log: $runLogPath)")
         }
     }
