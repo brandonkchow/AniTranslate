@@ -29,7 +29,16 @@ object ModelCatalogParser {
     private val NON_CHAT_ID_MARKERS =
         listOf("whisper", "tts", "guard", "safety", "moderation", "embed")
 
-    fun parseOpenRouter(json: String): List<CatalogModel> {
+    fun parseOpenRouter(json: String): List<CatalogModel> =
+        parseOpenAiStyleCatalog(json, fixedProviderId = "openrouter")
+
+    fun parseProxyCatalog(json: String): List<CatalogModel> =
+        parseOpenAiStyleCatalog(json, fixedProviderId = null)
+
+    private fun parseOpenAiStyleCatalog(
+        json: String,
+        fixedProviderId: String?
+    ): List<CatalogModel> {
         val root = try {
             anyAdapter.fromJson(json)
         } catch (_: Exception) {
@@ -42,14 +51,14 @@ object ModelCatalogParser {
         val result = mutableListOf<CatalogModel>()
         for (item in data) {
             val obj = item as? Map<*, *> ?: continue
+            val providerId = fixedProviderId
+                ?: (obj["provider"] as? String)?.trim()?.lowercase()?.takeIf { it.isNotBlank() }
+                ?: continue
             val id = obj["id"] as? String ?: continue
             if (id.isBlank()) continue
             val name = (obj["name"] as? String)?.takeIf { it.isNotBlank() } ?: id
             val pricing = obj["pricing"] as? Map<*, *>
-            val promptStr = pricing?.get("prompt")?.toString()?.trim() ?: ""
-            val compStr = pricing?.get("completion")?.toString()?.trim() ?: ""
-            val isFree = (promptStr == "0" || promptStr == "0.0") &&
-                    (compStr == "0" || compStr == "0.0")
+            val isFree = isZeroPrice(pricing?.get("prompt")) && isZeroPrice(pricing?.get("completion"))
 
             val arch = obj["architecture"] as? Map<*, *>
             val inputMods = (arch?.get("input_modalities") as? List<*>)
@@ -78,11 +87,20 @@ object ModelCatalogParser {
                     textOnlyOutput = textOnlyOutput,
                     supportsJson = supportsJson,
                     contextLength = contextLength,
-                    providerId = "openrouter"
+                    providerId = providerId
                 )
             )
         }
         return result
+    }
+
+    private fun isZeroPrice(value: Any?): Boolean = when (value) {
+        is Number -> value.toDouble() == 0.0
+        is String -> {
+            val trimmed = value.trim()
+            trimmed == "0" || trimmed == "0.0" || trimmed.toDoubleOrNull() == 0.0
+        }
+        else -> false
     }
 
     fun parseGroq(json: String): List<CatalogModel> {
@@ -384,13 +402,37 @@ object ModelCatalogFetcher {
         }
     }
 
+    fun fetchProxyCatalog(baseUrl: String, apiKey: String): List<CatalogModel> {
+        val cleanBase = baseUrl.trim().trimEnd('/')
+        val cleanKey = apiKey.trim()
+        if (cleanBase.isBlank() || cleanKey.isBlank()) return emptyList()
+        return try {
+            val request = okhttp3.Request.Builder()
+                .url("$cleanBase/models")
+                .addHeader("Authorization", "Bearer $cleanKey")
+                .get()
+                .build()
+            HttpClientProvider.client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return emptyList()
+                val body = response.body?.string().orEmpty()
+                ModelCatalogParser.parseProxyCatalog(body)
+            }
+        } catch (_: Throwable) {
+            emptyList()
+        }
+    }
+
     fun fetchAll(
         store: ModelCatalogStore,
         groqKey: String = "",
-        geminiKey: String = ""
+        geminiKey: String = "",
+        proxyEndpoints: List<Pair<String, String>> = emptyList()
     ): List<CatalogModel> {
         val cached = store.load()
         return try {
+            val proxyModels = proxyEndpoints.flatMap { (baseUrl, apiKey) ->
+                fetchProxyCatalog(baseUrl, apiKey)
+            }
             val orModels = fetchOpenRouter()
             val groqModels = if (groqKey.isNotBlank()) fetchGroq(groqKey) else emptyList()
             val geminiModels = if (geminiKey.isNotBlank()) fetchGemini(geminiKey) else emptyList()
@@ -400,7 +442,8 @@ object ModelCatalogFetcher {
             val finalGroq = if (groqModels.isNotEmpty()) groqModels else cachedByProvider["groq"].orEmpty()
             val finalGemini = if (geminiModels.isNotEmpty()) geminiModels else cachedByProvider["gemini"].orEmpty()
 
-            val combined = finalOr + finalGroq + finalGemini
+            val combined = (proxyModels + finalOr + finalGroq + finalGemini)
+                .distinctBy { it.providerId + "|" + it.id }
             if (combined.isNotEmpty()) {
                 store.save(combined)
                 combined
@@ -479,9 +522,9 @@ object ModelCatalogMigration {
         "llama-3.3-70b-versatile" to "openai/gpt-oss-120b",
         "llama-3.1-8b-instant" to "openai/gpt-oss-120b",
         "gemma2-9b-it" to "openai/gpt-oss-20b",
-        "meta-llama/llama-3.3-70b-instruct:free" to "google/gemma-4-31b-it:free",
-        "google/gemini-2.0-flash-exp:free" to "google/gemma-4-31b-it:free",
-        "qwen/qwen-2.5-vl-72b-instruct:free" to "google/gemma-4-31b-it:free",
-        "deepseek/deepseek-chat:free" to "nvidia/nemotron-3-super-120b-a12b:free"
+        "meta-llama/llama-3.3-70b-instruct:free" to "nvidia/nemotron-3.5-super-vl:free",
+        "google/gemini-2.0-flash-exp:free" to "nvidia/nemotron-3.5-super-vl:free",
+        "qwen/qwen-2.5-vl-72b-instruct:free" to "nvidia/nemotron-3.5-super-vl:free",
+        "deepseek/deepseek-chat:free" to "nvidia/nemotron-3.5-super-vl:free"
     )
 }

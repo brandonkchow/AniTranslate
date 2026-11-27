@@ -563,4 +563,78 @@ class ModelCatalogTest {
         assertFalse("A repaired slot is no longer flagged retired", updated[0].isModelRetired)
         assertEquals("A hand-picked model id must never be replaced", "my-chosen-model:free", updated[1].model)
     }
+
+    @Test
+    fun parseProxyCatalogTagsProviderPricingModalitiesAndSkipsMissingProvider() {
+        val json = """
+            {
+              "data": [
+                {
+                  "id": "gemini-2.5-flash",
+                  "name": "Gemini 2.5 Flash",
+                  "provider": "Gemini",
+                  "pricing": { "prompt": "0", "completion": "0" },
+                  "context_length": 1048576,
+                  "architecture": { "input_modalities": ["text", "image"], "output_modalities": ["text"] },
+                  "supported_parameters": ["response_format"]
+                },
+                {
+                  "id": "openai/gpt-oss-120b",
+                  "provider": "groq",
+                  "pricing": { "prompt": 0, "completion": "0.0" },
+                  "context_length": 131072,
+                  "architecture": { "input_modalities": ["text"], "output_modalities": ["text"] }
+                },
+                {
+                  "id": "paid-model",
+                  "provider": "openrouter",
+                  "pricing": { "prompt": "0.001", "completion": "0" },
+                  "context_length": 32768,
+                  "architecture": { "input_modalities": ["text"], "output_modalities": ["text"] }
+                },
+                {
+                  "id": "unpriced-model",
+                  "provider": "openrouter",
+                  "context_length": 32768,
+                  "architecture": { "input_modalities": ["text"], "output_modalities": ["text"] }
+                },
+                {
+                  "id": "no-provider-model",
+                  "pricing": { "prompt": "0", "completion": "0" },
+                  "context_length": 32768,
+                  "architecture": { "input_modalities": ["text"], "output_modalities": ["text"] }
+                },
+                {
+                  "id": "blank-provider-model",
+                  "provider": "   ",
+                  "pricing": { "prompt": "0", "completion": "0" },
+                  "context_length": 32768,
+                  "architecture": { "input_modalities": ["text"], "output_modalities": ["text"] }
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val parsed = ModelCatalogParser.parseProxyCatalog(json)
+        assertEquals(4, parsed.size)
+
+        val gemini = parsed.first { it.id == "gemini-2.5-flash" }
+        assertEquals("gemini", gemini.providerId)
+        assertTrue(gemini.free)
+        assertTrue(gemini.acceptsImage)
+        assertTrue(gemini.textOnlyOutput)
+        assertTrue(gemini.supportsJson)
+        assertEquals(1048576, gemini.contextLength)
+
+        val groq = parsed.first { it.id == "openai/gpt-oss-120b" }
+        assertEquals("groq", groq.providerId)
+        assertTrue(groq.free)
+        assertFalse(groq.acceptsImage)
+
+        val paid = parsed.first { it.id == "paid-model" }
+        assertFalse(paid.free)
+
+        val unpriced = parsed.first { it.id == "unpriced-model" }
+        assertFalse(unpriced.free)
+    }
 }

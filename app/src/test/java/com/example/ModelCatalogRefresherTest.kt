@@ -120,4 +120,38 @@ class ModelCatalogRefresherTest {
 
         assertTrue(store.lastFetchedEpochMs() > 0L)
     }
+
+    @Test
+    fun proxyEndpointsReturnsOnlyCustomBaseUrlSlotsWithKeysDeduped() {
+        val slots = listOf(
+            ApiSlot(
+                provider = ApiProvider.OPENROUTER,
+                baseUrl = "${ApiProvider.OPENROUTER.defaultBaseUrl}/",
+                apiKey = "or-direct-key"
+            ),
+            ApiSlot(
+                provider = ApiProvider.GEMINI,
+                baseUrl = "http://127.0.0.1:8080/v1/",
+                apiKey = "proxy-key"
+            ),
+            ApiSlot(
+                provider = ApiProvider.GROQ,
+                baseUrl = "http://127.0.0.1:8080/v1",
+                apiKey = "proxy-key"
+            ),
+            ApiSlot(
+                provider = ApiProvider.GROQ,
+                baseUrl = "http://127.0.0.1:8081/v1",
+                apiKey = "   "
+            ),
+            ApiSlot(
+                provider = ApiProvider.CUSTOM,
+                baseUrl = "",
+                apiKey = "custom-key"
+            )
+        )
+
+        val endpoints = ModelCatalogRefresher.proxyEndpoints(slots)
+        assertEquals(listOf("http://127.0.0.1:8080/v1" to "proxy-key"), endpoints)
+    }
 }

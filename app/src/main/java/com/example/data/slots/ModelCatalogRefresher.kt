@@ -30,6 +30,20 @@ object ModelCatalogRefresher {
         return groq.trim() to gemini.trim()
     }
 
+    /** Custom gateway endpoints: distinct (baseUrl, apiKey) pairs for keyed slots with non-default baseUrl. */
+    fun proxyEndpoints(slots: List<ApiSlot>): List<Pair<String, String>> {
+        return slots.mapNotNull { slot ->
+            val key = slot.apiKey.trim()
+            val base = slot.baseUrl.trim().trimEnd('/')
+            val defaultBase = slot.provider.defaultBaseUrl.trim().trimEnd('/')
+            if (key.isNotBlank() && base.isNotBlank() && base != defaultBase) {
+                base to key
+            } else {
+                null
+            }
+        }.distinct()
+    }
+
     /**
      * Refreshes the catalogue when it is stale (or when [force] is set). Never throws: a failed
      * refresh leaves the previous cache in place so a job can still run.
@@ -39,7 +53,7 @@ object ModelCatalogRefresher {
         slots: List<ApiSlot>,
         force: Boolean = false,
         fetch: (groqKey: String, geminiKey: String) -> List<CatalogModel> = { groq, gemini ->
-            ModelCatalogFetcher.fetchAll(store, groq, gemini)
+            ModelCatalogFetcher.fetchAll(store, groq, gemini, proxyEndpoints(slots))
         }
     ): Outcome {
         val cached = store.load()

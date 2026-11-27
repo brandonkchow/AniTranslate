@@ -119,11 +119,11 @@ class SlotStorage private constructor(private val context: Context) {
         return listOf(
             ApiSlot(
                 provider = ApiProvider.OPENROUTER,
-                label = "OpenRouter: Gemma 4 31B (free, ZDR)",
+                label = "OpenRouter: Nemotron 3.5 Super VL (free)",
                 apiKey = "",
-                model = "google/gemma-4-31b-it:free",
+                model = "nvidia/nemotron-3.5-super-vl:free",
                 baseUrl = "https://openrouter.ai/api/v1",
-                role = SlotRole.TRANSLATE,
+                role = SlotRole.ANY,
                 enabled = true
             ),
             ApiSlot(
@@ -132,7 +132,7 @@ class SlotStorage private constructor(private val context: Context) {
                 apiKey = envGeminiKey,
                 model = "gemini-2.5-flash",
                 baseUrl = "https://generativelanguage.googleapis.com/v1beta",
-                role = SlotRole.ANY,
+                role = SlotRole.DETECT_OCR,
                 enabled = true
             ),
             ApiSlot(

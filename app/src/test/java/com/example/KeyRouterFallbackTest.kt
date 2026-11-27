@@ -205,10 +205,62 @@ class KeyRouterFallbackTest {
         val openRouterDefault = defaults.first { it.provider == ApiProvider.OPENROUTER }
 
         assertFalse(
-            "The stock OpenRouter model must not be one that ZDR-enforcing accounts reject",
-            openRouterDefault.model.contains("nemotron", ignoreCase = true)
+            "The stock OpenRouter model must not be the retired ZDR-excluded nemotron-3-super-120b-a12b",
+            openRouterDefault.model.contains("nemotron-3-super-120b-a12b", ignoreCase = true)
         )
-        assertEquals("google/gemma-4-31b-it:free", openRouterDefault.model)
+        assertEquals("nvidia/nemotron-3.5-super-vl:free", openRouterDefault.model)
+        assertEquals("OpenRouter: Nemotron 3.5 Super VL (free)", openRouterDefault.label)
+    }
+
+    @Test
+    fun defaultVisionSlotIsDetectOcrOnly() {
+        val defaults = storage.createDefaultSlots()
+        val geminiDefault = defaults.first { it.provider == ApiProvider.GEMINI }
+        val openRouterDefault = defaults.first { it.provider == ApiProvider.OPENROUTER }
+        val groqDefault = defaults.first { it.provider == ApiProvider.GROQ }
+
+        assertEquals(SlotRole.DETECT_OCR, geminiDefault.role)
+        assertEquals(SlotRole.ANY, openRouterDefault.role)
+        assertEquals(SlotRole.TRANSLATE, groqDefault.role)
+    }
+
+    @Test
+    fun defaultSlotsRouteVisionToGeminiAndNeverRouteTranslateToGemini() = runBlocking {
+        val defaults = storage.createDefaultSlots().map { slot ->
+            slot.copy(
+                enabled = true,
+                apiKey = "key-${slot.provider.name.lowercase()}",
+                isInvalidKey = false,
+                isModelRetired = false
+            )
+        }
+        storage.saveSlots(defaults)
+        defaults.forEach { storage.resetSlotCooldown(it.id) }
+
+        val openRouterDefault = defaults.first { it.provider == ApiProvider.OPENROUTER }
+        val geminiDefault = defaults.first { it.provider == ApiProvider.GEMINI }
+
+        val (detectSlot, _) = router.getAvailableSlot(PipelineStage.DETECT_OCR)
+        assertNotNull("DETECT_OCR must have an eligible default slot", detectSlot)
+        assertEquals(ApiProvider.OPENROUTER, detectSlot!!.provider)
+        assertEquals(openRouterDefault.id, detectSlot.id)
+
+        val (fallbackDetectSlot, _) = router.getAvailableSlot(PipelineStage.DETECT_OCR, setOf(openRouterDefault.id))
+        assertNotNull("DETECT_OCR must fall back to GEMINI when OPENROUTER is excluded", fallbackDetectSlot)
+        assertEquals(ApiProvider.GEMINI, fallbackDetectSlot!!.provider)
+        assertEquals(geminiDefault.id, fallbackDetectSlot.id)
+
+        val excluded = mutableSetOf<String>()
+        while (true) {
+            val (translateSlot, _) = router.getAvailableSlot(PipelineStage.TRANSLATE, excluded)
+            if (translateSlot == null) break
+            assertNotEquals(
+                "TRANSLATE must never select the default GEMINI slot",
+                ApiProvider.GEMINI,
+                translateSlot.provider
+            )
+            excluded.add(translateSlot.id)
+        }
     }
 
     @Test

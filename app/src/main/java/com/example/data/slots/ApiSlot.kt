@@ -25,14 +25,14 @@ enum class ApiProvider(
     OPENROUTER(
         displayName = "OpenRouter",
         defaultBaseUrl = "https://openrouter.ai/api/v1",
-        defaultModel = "google/gemma-4-31b-it:free",
+        defaultModel = "nvidia/nemotron-3.5-super-vl:free",
         isVisionCapable = true,
         recommendedModels = listOf(
-            "google/gemma-4-31b-it:free" to "Google: Gemma 4 31B IT (Free · Vision + Translate)",
+            "nvidia/nemotron-3.5-super-vl:free" to "NVIDIA: Nemotron 3.5 Super VL (Free · Vision + Translate · 1M ctx)",
+            "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free" to "NVIDIA: Nemotron 3 Nano Omni (Free · Vision + Translate · 256K ctx)",
             "dots-studio/dots-3-note-preview:free" to "Dots: 3 Note Preview (Free · Vision · 512K ctx)",
-            "nex-agi/nex-n2.5-pro:free" to "Nex: N2.5 Pro (Free · Vision · 262K ctx)",
+            "google/gemma-4-31b-it:free" to "Google: Gemma 4 31B IT (Free · Vision + Translate)",
             "google/gemma-4-26b-a4b-it:free" to "Google: Gemma 4 26B A4B IT (Free · Vision · 262K ctx)",
-            "nvidia/nemotron-3-super-120b-a12b:free" to "NVIDIA: Nemotron 3 Super (Free · ZDR-excluded accounts may fail)",
             "openai/gpt-4o-mini" to "OpenAI: GPT-4o Mini (Paid)"
         )
     ),
