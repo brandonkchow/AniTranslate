@@ -6,20 +6,29 @@ import com.example.data.models.UnitState
 
 /**
  * Classifies detected text regions into [TextClass.SKIP], [TextClass.INFO], or
- * [TextClass.DIALOGUE] using measured geometric and OCR text properties.
- *
- * - [TextClass.SKIP]: non-balloon `side_text`, punctuation-only regions (`...`),
- *   large horizontal stylized titles/logos, and compact horizontal kanji-heavy
- *   background print/signage without digits or speech punctuation.
- * - [TextClass.INFO]: structured horizontal floating info cards, rankings, and
- *   captions (multi-line cards with digits or Latin runs, or explicit ranking labels).
- * - [TextClass.DIALOGUE]: speech bubbles, vertical floating speech/SFX, and any
- *   unclassifiable floating text (fail-closed to current behaviour).
+ * [TextClass.DIALOGUE]. Priority order: early structural/display rules (`side_text`,
+ * empty/punctuation-only, large horizontal title/logo, floating [TextClass.INFO] cards,
+ * and compact horizontal kanji background print) run first; for remaining floating text,
+ * the statement guard runs before SFX detection so statement-shaped text always stays
+ * [TextClass.DIALOGUE], followed by the positive-evidence horizontal-only SFX rule
+ * (requiring an onomatopoeia marker, [TextClass.SKIP]), with all other regions failing
+ * closed to [TextClass.DIALOGUE].
  */
 object TextClassifier {
 
     private val SPEECH_PUNCTUATION = setOf(
         '!', '！', '?', '？', '…', '〜', '～', '「', '」', '『', '』', '♪', '♡', '★'
+    )
+
+    private val CLAUSE_MARKERS = listOf(
+        "いたのだ", "だった", "です", "ます", "は", "が", "を", "に", "へ", "の", "だ"
+    )
+
+    private val SFX_TRAILING_PUNCTUATION = setOf('！', '!', '？', '?', '…', '―', '・')
+    private val SFX_MARKERS = setOf('ー', '―', '…', 'ッ', 'ァ', 'ィ', 'ゥ', 'ェ', 'ォ')
+    private val SFX_STRIP_CHARS = setOf(
+        'ー', '―', '…', '・', '！', '!', '？', '?',
+        'ャ', 'ュ', 'ョ', 'ァ', 'ィ', 'ゥ', 'ェ', 'ォ', 'ッ'
     )
 
     fun classify(bubble: Bubble): TextClass {
@@ -49,19 +58,31 @@ object TextClassifier {
         }
 
         // Regions outside speech bubbles ("floating" / text_free)
-        if (bubble.type.equals("floating", ignoreCase = true) && !bubble.vertical) {
-            // Structured info card / ranking / caption:
-            // multi-line with digits or long Latin run, or explicit ranking/number label.
-            val isRankingOrCard = (lines >= 2 && (hasDigit || maxLatin >= 4)) ||
-                (hasDigit && (maxLatin >= 2 || text.contains('位') || text.contains('#') || text.contains("No.", ignoreCase = true)))
-            if (isRankingOrCard) {
-                return TextClass.INFO
+        if (bubble.type.equals("floating", ignoreCase = true)) {
+            if (!bubble.vertical) {
+                // Structured info card / ranking / caption:
+                // multi-line with digits or long Latin run, or explicit ranking/number label.
+                val isRankingOrCard = (lines >= 2 && (hasDigit || maxLatin >= 4)) ||
+                    (hasDigit && (maxLatin >= 2 || text.contains('位') || text.contains('#') || text.contains("No.", ignoreCase = true)))
+                if (isRankingOrCard) {
+                    return TextClass.INFO
+                }
+
+                // Background print / signage: compact single-line horizontal kanji-heavy
+                // label without digits, Latin runs, or speech punctuation.
+                val kanjiCount = text.count { isKanji(it) }
+                if (lines == 1 && !hasDigit && maxLatin == 0 && !hasSpeechPunctuation(text) && kanjiCount >= 2 && h <= 0.08f) {
+                    return TextClass.SKIP
+                }
             }
 
-            // Background print / signage: compact single-line horizontal kanji-heavy
-            // label without digits, Latin runs, or speech punctuation.
-            val kanjiCount = text.count { isKanji(it) }
-            if (lines == 1 && !hasDigit && maxLatin == 0 && !hasSpeechPunctuation(text) && kanjiCount >= 2 && h <= 0.08f) {
+            // Statement guard: statement-shaped floating text must never be SFX-SKIP.
+            if (isStatementShaped(text)) {
+                return TextClass.DIALOGUE
+            }
+
+            // Positive-evidence SFX rule (floating, horizontal only).
+            if (!bubble.vertical && lines == 1 && isPositiveSfx(text)) {
                 return TextClass.SKIP
             }
         }
@@ -81,6 +102,44 @@ object TextClassifier {
             }
             it.copy(textClass = textClass, unitState = unitState)
         }
+
+    private fun isStatementShaped(text: String): Boolean {
+        if (text.any { isKanji(it) }) return true
+        val letterCount = text.count { it.isLetter() }
+        if (text.contains('。')) return true
+        if ((text.contains("――") || text.contains('…') || text.contains('―')) && letterCount >= 6) return true
+        if (letterCount >= 8) return true
+        if (CLAUSE_MARKERS.any { text.contains(it) }) return true
+        return false
+    }
+
+    private fun isPositiveSfx(text: String): Boolean {
+        val coreInput = text.trimEnd { it in SFX_TRAILING_PUNCTUATION }
+        if (coreInput.isEmpty()) return false
+        if (!coreInput.all { isKana(it) }) return false
+
+        val totalKana = coreInput.length
+        if (totalKana > 12) return false
+
+        var hasRepeatedKana = false
+        val collapsed = buildString {
+            var prev: Char? = null
+            for (ch in coreInput) {
+                if (ch in SFX_STRIP_CHARS) continue
+                if (ch == prev) {
+                    hasRepeatedKana = true
+                } else {
+                    append(ch)
+                    prev = ch
+                }
+            }
+        }
+        val hasMarker = hasRepeatedKana || text.any { it in SFX_MARKERS }
+        return hasMarker && collapsed.length in 1..6
+    }
+
+    private fun isKana(ch: Char): Boolean =
+        ch.code in 0x3041..0x3096 || ch.code in 0x30A1..0x30FA || ch == 'ー' || ch == 'ッ'
 
     private fun hasSpeechPunctuation(text: String): Boolean =
         text.any { it in SPEECH_PUNCTUATION }
