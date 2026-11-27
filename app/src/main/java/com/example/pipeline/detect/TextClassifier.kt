@@ -24,11 +24,15 @@ object TextClassifier {
         "いたのだ", "だった", "です", "ます", "は", "が", "を", "に", "へ", "の", "だ"
     )
 
-    private val SFX_TRAILING_PUNCTUATION = setOf('！', '!', '？', '?', '…', '―', '・')
-    private val SFX_MARKERS = setOf('ー', '―', '…', 'ッ', 'ァ', 'ィ', 'ゥ', 'ェ', 'ォ')
+    private val SFX_MARKERS = setOf(
+        'ー', '―', '…',
+        'ッ', 'ァ', 'ィ', 'ゥ', 'ェ', 'ォ',
+        'っ', 'ぁ', 'ぃ', 'ぅ', 'ぇ', 'ぉ'
+    )
     private val SFX_STRIP_CHARS = setOf(
         'ー', '―', '…', '・', '！', '!', '？', '?',
-        'ャ', 'ュ', 'ョ', 'ァ', 'ィ', 'ゥ', 'ェ', 'ォ', 'ッ'
+        'ャ', 'ュ', 'ョ', 'ァ', 'ィ', 'ゥ', 'ェ', 'ォ', 'ッ',
+        'ゃ', 'ゅ', 'ょ', 'ぁ', 'ぃ', 'ぅ', 'ぇ', 'ぉ', 'っ'
     )
 
     fun classify(bubble: Bubble): TextClass {
@@ -113,19 +117,25 @@ object TextClassifier {
         return false
     }
 
+    /**
+     * Positive-evidence SFX detector for single-line horizontal floating text.
+     *
+     * Requires all non-strip characters to be katakana (`0x30A1..0x30FA` or `'ー'`)
+     * with at least one repetition or SFX marker.
+     * Accepted residual: pure-hiragana SFX (e.g. `"ず―――ん"`) falls through to
+     * [TextClass.DIALOGUE] (translated, the safe direction).
+     */
     private fun isPositiveSfx(text: String): Boolean {
-        val coreInput = text.trimEnd { it in SFX_TRAILING_PUNCTUATION }
-        if (coreInput.isEmpty()) return false
-        if (!coreInput.all { isKana(it) }) return false
+        if (text.length > 12) return false
 
-        val totalKana = coreInput.length
-        if (totalKana > 12) return false
+        val stripped = text.filterNot { it in SFX_STRIP_CHARS }
+        if (stripped.isEmpty()) return false
+        if (!stripped.all { isKatakana(it) }) return false
 
         var hasRepeatedKana = false
         val collapsed = buildString {
             var prev: Char? = null
-            for (ch in coreInput) {
-                if (ch in SFX_STRIP_CHARS) continue
+            for (ch in stripped) {
                 if (ch == prev) {
                     hasRepeatedKana = true
                 } else {
@@ -138,8 +148,8 @@ object TextClassifier {
         return hasMarker && collapsed.length in 1..6
     }
 
-    private fun isKana(ch: Char): Boolean =
-        ch.code in 0x3041..0x3096 || ch.code in 0x30A1..0x30FA || ch == 'ー' || ch == 'ッ'
+    private fun isKatakana(ch: Char): Boolean =
+        ch.code in 0x30A1..0x30FA || ch == 'ー'
 
     private fun hasSpeechPunctuation(text: String): Boolean =
         text.any { it in SPEECH_PUNCTUATION }

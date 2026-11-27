@@ -238,4 +238,18 @@ class TextClassifierTest {
         assertEquals(TextClass.DIALOGUE, TextClassifier.classify(screamInBubble))
         assertEquals(TextClass.DIALOGUE, TextClassifier.classify(horizontalStatement))
     }
+
+    @Test
+    fun katakanaOnlySfxAndMidStringStripChars() {
+        val hiraganaExcl1 = Bubble(30, "いいね！", listOf(0.10f, 0.10f, 0.20f, 0.15f), vertical = false, type = "floating")
+        val hiraganaExcl2 = Bubble(31, "すごーい", listOf(0.10f, 0.20f, 0.20f, 0.25f), vertical = false, type = "floating")
+        val midStripSfx = Bubble(32, "ゴウ…ッ", listOf(0.10f, 0.30f, 0.20f, 0.36f), vertical = false, type = "floating")
+        // Accepted residual: hiragana SFX falls through to DIALOGUE (translated, safe direction)
+        val hiraganaSfxResidual = Bubble(33, "ず―――ん", listOf(0.10f, 0.40f, 0.20f, 0.46f), vertical = false, type = "floating")
+
+        assertEquals(TextClass.DIALOGUE, TextClassifier.classify(hiraganaExcl1))
+        assertEquals(TextClass.DIALOGUE, TextClassifier.classify(hiraganaExcl2))
+        assertEquals(TextClass.SKIP, TextClassifier.classify(midStripSfx))
+        assertEquals(TextClass.DIALOGUE, TextClassifier.classify(hiraganaSfxResidual))
+    }
 }
