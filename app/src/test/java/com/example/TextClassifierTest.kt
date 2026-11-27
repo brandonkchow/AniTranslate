@@ -208,4 +208,48 @@ class TextClassifierTest {
         assertEquals(TextClass.DIALOGUE, parsed[2].textClass)
         assertFalse(parsed[2].isNonBalloon)
     }
+
+    // ---- Statement guard & positive-evidence SFX tests ----
+
+    @Test
+    fun monologueControlsRemainDialogueWhileGenuineHorizontalSfxIsSkipped() {
+        val monologueControls = listOf(
+            Bubble(1, "しかもこの感覚は――…", listOf(0.8459f, 0.3219f, 0.9249f, 0.4537f), vertical = true, type = "floating"),
+            Bubble(2, "あの部屋にはこいつから発せられる霊圧が満ちていた…", listOf(0.2363f, 0.6788f, 0.384f, 0.8785f), vertical = true, type = "floating"),
+            Bubble(3, "それが私の感覚をことごとく混乱させていたのだ…！", listOf(0.0616f, 0.6793f, 0.2006f, 0.8769f), vertical = true, type = "floating"),
+            Bubble(4, "あれはこいつだったのだ！！", listOf(0.7936f, 0.6807f, 0.9246f, 0.824f), vertical = true, type = "floating")
+        )
+        for (b in monologueControls) {
+            assertEquals("051 monologue ${b.id} must be DIALOGUE", TextClass.DIALOGUE, TextClassifier.classify(b))
+        }
+
+        val genuineSfx = listOf(
+            Bubble(10, "ドオォォン", listOf(0.02f, 0.02f, 0.98f, 0.20f), vertical = false, type = "floating"),
+            Bubble(11, "ガッ！！", listOf(0.10f, 0.10f, 0.30f, 0.22f), vertical = false, type = "floating"),
+            Bubble(12, "ザッ", listOf(0.10f, 0.30f, 0.16f, 0.36f), vertical = false, type = "floating"),
+            Bubble(13, "バサッ", listOf(0.10f, 0.40f, 0.16f, 0.48f), vertical = false, type = "floating")
+        )
+        for (b in genuineSfx) {
+            assertEquals("genuine SFX ${b.text} must be SKIP", TextClass.SKIP, TextClassifier.classify(b))
+        }
+
+        val screamInBubble = Bubble(20, "アアアアアア…", listOf(0.20f, 0.20f, 0.40f, 0.35f), vertical = false, type = "bubble")
+        val horizontalStatement = Bubble(21, "あれはこいつだったのだ！！", listOf(0.7936f, 0.6807f, 0.9246f, 0.824f), vertical = false, type = "floating")
+        assertEquals(TextClass.DIALOGUE, TextClassifier.classify(screamInBubble))
+        assertEquals(TextClass.DIALOGUE, TextClassifier.classify(horizontalStatement))
+    }
+
+    @Test
+    fun katakanaOnlySfxAndMidStringStripChars() {
+        val hiraganaExcl1 = Bubble(30, "いいね！", listOf(0.10f, 0.10f, 0.20f, 0.15f), vertical = false, type = "floating")
+        val hiraganaExcl2 = Bubble(31, "すごーい", listOf(0.10f, 0.20f, 0.20f, 0.25f), vertical = false, type = "floating")
+        val midStripSfx = Bubble(32, "ゴウ…ッ", listOf(0.10f, 0.30f, 0.20f, 0.36f), vertical = false, type = "floating")
+        // Accepted residual: hiragana SFX falls through to DIALOGUE (translated, safe direction)
+        val hiraganaSfxResidual = Bubble(33, "ず―――ん", listOf(0.10f, 0.40f, 0.20f, 0.46f), vertical = false, type = "floating")
+
+        assertEquals(TextClass.DIALOGUE, TextClassifier.classify(hiraganaExcl1))
+        assertEquals(TextClass.DIALOGUE, TextClassifier.classify(hiraganaExcl2))
+        assertEquals(TextClass.SKIP, TextClassifier.classify(midStripSfx))
+        assertEquals(TextClass.DIALOGUE, TextClassifier.classify(hiraganaSfxResidual))
+    }
 }
